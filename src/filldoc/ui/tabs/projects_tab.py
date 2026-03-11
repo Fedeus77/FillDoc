@@ -51,6 +51,17 @@ class ProjectsTab(QWidget):
         self.save_btn.clicked.connect(self._save_current)
         self.list.currentRowChanged.connect(self._select_project)
 
+    def _project_display_name(self, project: Project) -> str:
+        creditor = project.fields.get("Кредитор", "").strip()
+        debtor = project.fields.get("Должник", "").strip()
+        if creditor and debtor:
+            return f"{creditor} — {debtor}"
+        if creditor:
+            return creditor
+        if debtor:
+            return debtor
+        return project.project_id
+
     def set_settings(self, s: AppSettings) -> None:
         self._settings = s
 
@@ -63,7 +74,7 @@ class ProjectsTab(QWidget):
             self._projects = store.load_projects()
             self.list.clear()
             for p in self._projects:
-                self.list.addItem(p.project_id)
+                self.list.addItem(self._project_display_name(p))
             if self._projects:
                 self.list.setCurrentRow(0)
         except Exception as e:  # noqa: BLE001
