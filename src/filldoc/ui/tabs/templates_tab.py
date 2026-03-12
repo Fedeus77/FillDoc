@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -73,25 +74,25 @@ class TemplatesTab(QWidget):
         self.tree.clear()
         cat_nodes: dict[str, QTreeWidgetItem] = {}
 
-        def folder_label(category: str) -> str:
-            if not category:
-                root_name = Path(self._settings.templates_dir).name.strip()
-                return root_name or "(корень)"
-            return Path(category).name or category
-
-        def get_cat_node(category: str) -> QTreeWidgetItem:
-            if category not in cat_nodes:
-                node = QTreeWidgetItem([folder_label(category)])
-                node.setData(0, 0, None)
-                cat_nodes[category] = node
-                self.tree.addTopLevelItem(node)
-            return cat_nodes[category]
-
         for c in self._cards:
-            cat = get_cat_node(c.category)
-            item = QTreeWidgetItem([Path(c.path).name])
-            item.setData(0, 0, c.path)
-            cat.addChild(item)
+            category_key = c.category
+
+            if category_key not in cat_nodes:
+                if category_key:
+                    label = Path(category_key).name or category_key
+                else:
+                    label = Path(self._settings.templates_dir).name or "(корень)"
+                node = QTreeWidgetItem([label])
+                # UserRole — не отображаемая роль, используем для хранения маркера "папка"
+                node.setData(0, Qt.ItemDataRole.UserRole, None)
+                cat_nodes[category_key] = node
+                self.tree.addTopLevelItem(node)
+
+            parent_node = cat_nodes[category_key]
+            item = QTreeWidgetItem([Path(c.path).stem])
+            # Сохраняем полный путь в UserRole, не перезаписывая DisplayRole
+            item.setData(0, Qt.ItemDataRole.UserRole, c.path)
+            parent_node.addChild(item)
 
         self.tree.expandAll()
 
@@ -99,7 +100,7 @@ class TemplatesTab(QWidget):
         if not current:
             self.details.setPlainText("")
             return
-        path = current.data(0, 0)
+        path = current.data(0, Qt.ItemDataRole.UserRole)
         if not path:
             self.details.setPlainText("")
             return
