@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -71,9 +73,15 @@ class TemplatesTab(QWidget):
         self.tree.clear()
         cat_nodes: dict[str, QTreeWidgetItem] = {}
 
+        def folder_label(category: str) -> str:
+            if not category:
+                root_name = Path(self._settings.templates_dir).name.strip()
+                return root_name or "(корень)"
+            return Path(category).name or category
+
         def get_cat_node(category: str) -> QTreeWidgetItem:
             if category not in cat_nodes:
-                node = QTreeWidgetItem([category or "(без категории)"])
+                node = QTreeWidgetItem([folder_label(category)])
                 node.setData(0, 0, None)
                 cat_nodes[category] = node
                 self.tree.addTopLevelItem(node)
@@ -81,7 +89,7 @@ class TemplatesTab(QWidget):
 
         for c in self._cards:
             cat = get_cat_node(c.category)
-            item = QTreeWidgetItem([c.name])
+            item = QTreeWidgetItem([Path(c.path).name])
             item.setData(0, 0, c.path)
             cat.addChild(item)
 
@@ -101,7 +109,7 @@ class TemplatesTab(QWidget):
             return
 
         text = []
-        text.append(f"Имя: {card.name}")
+        text.append(f"Имя файла: {Path(card.path).name}")
         text.append(f"Категория: {card.category}")
         text.append(f"Путь: {card.path}")
         text.append("")
