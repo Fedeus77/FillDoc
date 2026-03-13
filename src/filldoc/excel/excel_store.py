@@ -44,7 +44,9 @@ class ExcelProjectStore:
                 pid = (fields.get("№ дела") or "").strip()
                 if not pid:
                     pid = f"row:{idx}"
-                projects.append(Project(project_id=pid, fields=fields))
+                # Сохраняем также headers и номер строки (idx),
+                # чтобы потом можно было сохранять изменения без зависимости от "№ дела".
+                projects.append(Project(project_id=pid, fields=fields, headers=headers, row_index=idx))
             return projects
         except ExcelError:
             raise
@@ -67,14 +69,10 @@ class ExcelProjectStore:
 
     def save_project_fields(self, project: Project) -> None:
         """
-        MVP: запись обратно в Excel реализуем минимально:
-        - ищем строку по совпадению в колонке '№ дела'
-        - если колонки не существует или проект row:* — не сохраняем (явная ошибка)
+        Запись обратно в Excel:
+        - используем сохранённый номер строки (row_index), чтобы найти нужную строку
         - создаем бэкап перед записью
         """
-        if project.project_id.startswith("row:"):
-            raise ExcelError("Нельзя сохранить проект без '№ дела': добавьте колонку '№ дела' и заполните значение.")
-
         path = Path(self.excel_path)
         if not path.exists():
             raise ExcelError("Excel-файл недоступен или не существует.")
@@ -85,18 +83,11 @@ class ExcelProjectStore:
             wb = load_workbook(filename=path, read_only=False, data_only=False)
             ws = wb.worksheets[0]
             headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
-            if "№ дела" not in headers:
-                raise ExcelError("В Excel не найден обязательный столбец '№ дела'.")
-
-            col_idx = headers.index("№ дела") + 1
-            target_row = None
-            for r in range(2, ws.max_row + 1):
-                v = ws.cell(row=r, column=col_idx).value
-                if ("" if v is None else str(v)).strip() == project.project_id:
-                    target_row = r
-                    break
-            if target_row is None:
-                raise ExcelError(f"Не найден проект с '№ дела' = {project.project_id}.")
+            # Определяем строку, в которую нужно писать.
+            # Для проектов, загруженных из Excel, row_index всегда задан.
+            target_row = project.row_index
+            if target_row is None or target_row < 2 or target_row > ws.max_row:
+                raise ExcelError("Не удалось определить строку проекта в Excel для сохранения.")
 
             header_to_col = {headers[i]: i + 1 for i in range(len(headers)) if headers[i]}
             for k, v in project.fields.items():
@@ -108,4 +99,95 @@ class ExcelProjectStore:
             raise
         except Exception as e:  # noqa: BLE001
             raise ExcelError(f"Не удалось сохранить изменения в Excel: {e}") from e
+
+    def add_project(self, project: Project) -> None:
+        """Добавляет новую строку в конец Excel-листа и обновляет project.row_index."""
+        path = Path(self.excel_path)
+        if not path.exists():
+            raise ExcelError("Excel-файл недоступен или не существует.")
+
+        self.create_backup()
+
+        try:
+            wb = load_workbook(filename=path, read_only=False, data_only=False)
+            ws = wb.worksheets[0]
+            headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
+
+            header_to_idx = {h: i for i, h in enumerate(headers) if h}
+            new_row: list[str] = [""] * len(headers)
+            for k, v in project.fields.items():
+                if k in header_to_idx:
+                    new_row[header_to_idx[k]] = v
+
+            ws.append(new_row)
+            project.row_index = ws.max_row
+            project.headers = [h for h in headers if h]
+            wb.save(path)
+        except ExcelError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise ExcelError(f"Не удалось добавить проект в Excel: {e}") from e
+
+    def save_all_projects(self, projects: list[Project]) -> None:
+        """
+        Полная синхронизация списка проектов с Excel:
+        - пересобираем все строки (кроме заголовка) по текущему списку projects
+        - обновляем row_index у проектов под новые строки
+        """
+        path = Path(self.excel_path)
+        if not path.exists():
+            raise ExcelError("Excel-файл недоступен или не существует.")
+
+        self.create_backup()
+
+        try:
+            wb = load_workbook(filename=path, read_only=False, data_only=False)
+            ws = wb.worksheets[0]
+            headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
+
+            # Очищаем все строки, кроме заголовка
+            if ws.max_row > 1:
+                ws.delete_rows(2, ws.max_row - 1)
+
+            header_to_idx = {h: i for i, h in enumerate(headers) if h}
+
+            # Пересобираем таблицу по текущему списку проектов
+            for idx, project in enumerate(projects, start=2):
+                row_values: list[str] = [""] * len(headers)
+                for k, v in project.fields.items():
+                    if k in header_to_idx:
+                        row_values[header_to_idx[k]] = v
+                ws.append(row_values)
+                project.row_index = idx
+                project.headers = [h for h in headers if h]
+
+            wb.save(path)
+        except ExcelError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise ExcelError(f"Не удалось синхронизировать проекты с Excel: {e}") from e
+
+    def delete_project(self, project: Project) -> None:
+        """Удаляет строку проекта из Excel по row_index."""
+        path = Path(self.excel_path)
+        if not path.exists():
+            raise ExcelError("Excel-файл недоступен или не существует.")
+
+        if project.row_index is None:
+            raise ExcelError("Невозможно удалить проект: не задан номер строки в Excel.")
+
+        self.create_backup()
+
+        try:
+            wb = load_workbook(filename=path, read_only=False, data_only=False)
+            ws = wb.worksheets[0]
+            target_row = project.row_index
+            if target_row < 2 or target_row > ws.max_row:
+                raise ExcelError("Не удалось определить строку проекта в Excel для удаления.")
+            ws.delete_rows(target_row, 1)
+            wb.save(path)
+        except ExcelError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise ExcelError(f"Не удалось удалить проект из Excel: {e}") from e
 
