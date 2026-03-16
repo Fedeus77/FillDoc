@@ -3,15 +3,24 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor
+from PySide6.QtCore import Qt, QPoint, QByteArray, QSize
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QIcon, QPixmap, QPainter
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSplitter,
+    QTabWidget,
+    QTextEdit,
+    QToolButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -22,15 +31,276 @@ from filldoc.core.settings import AppSettings
 from filldoc.excel.excel_store import ExcelProjectStore
 from filldoc.excel.models import Project
 
+PROJECT_NAME_FIELD = "Имя проекта"
+
 _DROP_ACTIVE_STYLE = "QTableWidget { border: 2px dashed #4A90D9; border-radius: 4px; }"
 
+_CARD_FIXED_FIELDS = [
+    "Имя проекта",
+    "ИНН кредитора",
+    "ИНН должника",
+    "Номер дела",
+    "Номер листа и дата",
+    "Номер ИП",
+]
+
+# ── SVG-иконки ──────────────────────────────────────────────────────────────
+
+_SVG_REFRESH = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2.2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <path d="M1 4v6h6"/>
+  <path d="M23 20v-6h-6"/>
+  <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/>
+</svg>"""
+
+_SVG_SAVE = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2.2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+  <polyline points="17 21 17 13 7 13 7 21"/>
+  <polyline points="7 3 7 8 15 8"/>
+</svg>"""
+
+_SVG_ADD = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2.2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="10"/>
+  <line x1="12" y1="8" x2="12" y2="16"/>
+  <line x1="8"  y1="12" x2="16" y2="12"/>
+</svg>"""
+
+# ── Стили ────────────────────────────────────────────────────────────────────
+
+_BTN_STYLE = """
+QToolButton {{
+    background-color: {bg};
+    border: none;
+    border-radius: 9px;
+    min-width:  38px;
+    min-height: 38px;
+    max-width:  38px;
+    max-height: 38px;
+}}
+QToolButton:hover {{
+    background-color: {hover};
+}}
+QToolButton:pressed {{
+    background-color: {pressed};
+}}
+"""
+
+_TEXTEDIT_STYLE = """
+QTextEdit {
+    background-color: #ffffff;
+    border: 1px solid #dde2ea;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 12px;
+    color: #1e2a38;
+    selection-background-color: #c8dff7;
+}
+QTextEdit:focus {
+    border-color: #5b9bd5;
+    background-color: #fafcff;
+}
+"""
+
+_FIXED_VALUE_STYLE = """
+QLineEdit {
+    background-color: #ffffff;
+    border: 1px solid #dde2ea;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 12px;
+    color: #1e2a38;
+}
+QLineEdit:focus {
+    border-color: #5b9bd5;
+    background-color: #fafcff;
+}
+"""
+
+_CARD_LABEL_CSS = (
+    "color: #9aa8b8; font-size: 9px; font-weight: 700; "
+    "letter-spacing: 1px; padding: 0; margin: 0;"
+)
+
+_CUSTOM_NAME_EDIT_STYLE = """
+QLineEdit {
+    color: #9aa8b8;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px dashed #c8d4e0;
+    border-radius: 0;
+    padding: 0 2px 1px 0;
+    min-height: 16px;
+}
+QLineEdit:focus {
+    color: #4a7ab5;
+    border-bottom-color: #5b9bd5;
+}
+QLineEdit:hover {
+    border-bottom-color: #9ab4cc;
+}
+"""
+
+_MINI_BTN_STYLE = """
+QToolButton {
+    background: transparent;
+    border: none;
+    color: #b8c6d4;
+    font-size: 13px;
+    min-width:  22px;
+    min-height: 22px;
+    max-width:  22px;
+    max-height: 22px;
+    border-radius: 5px;
+}
+QToolButton:hover {
+    background: #e8edf3;
+    color: #5b6a7a;
+}
+QToolButton:pressed {
+    background: #d0d8e2;
+}
+"""
+
+_MINI_DEL_BTN_STYLE = """
+QToolButton {
+    background: transparent;
+    border: none;
+    color: #d0a8a8;
+    font-size: 13px;
+    min-width:  22px;
+    min-height: 22px;
+    max-width:  22px;
+    max-height: 22px;
+    border-radius: 5px;
+}
+QToolButton:hover {
+    background: #fde8e8;
+    color: #b04040;
+}
+QToolButton:pressed {
+    background: #f5d0d0;
+}
+"""
+
+_ADD_FIELD_BTN_STYLE = """
+QPushButton {
+    background: transparent;
+    color: #5b9bd5;
+    border: 1.5px dashed #9dc3e6;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 12px;
+}
+QPushButton:hover {
+    background: #eef5fc;
+    border-color: #5b9bd5;
+    color: #3a7ec0;
+}
+QPushButton:pressed {
+    background: #d8ecf8;
+}
+"""
+
+
+# ── Вспомогательные функции ──────────────────────────────────────────────────
+
+def _make_icon(svg_src: str, color: str = "#ffffff", size: int = 18) -> QIcon:
+    svg_bytes = QByteArray(svg_src.replace("currentColor", color).encode())
+    renderer = QSvgRenderer(svg_bytes)
+    px = QPixmap(size, size)
+    px.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(px)
+    renderer.render(painter)
+    painter.end()
+    return QIcon(px)
+
+
+def _icon_btn(svg: str, tooltip: str, icon_color: str, bg: str, hover: str, pressed: str) -> QToolButton:
+    btn = QToolButton()
+    btn.setIcon(_make_icon(svg, icon_color))
+    btn.setIconSize(QSize(18, 18))
+    btn.setToolTip(tooltip)
+    btn.setStyleSheet(_BTN_STYLE.format(bg=bg, hover=hover, pressed=pressed))
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    return btn
+
+
+def _mini_btn(text: str, tooltip: str, style: str = _MINI_BTN_STYLE) -> QToolButton:
+    btn = QToolButton()
+    btn.setText(text)
+    btn.setToolTip(tooltip)
+    btn.setStyleSheet(style)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    return btn
+
+
+# ── Авто-изменяемый QTextEdit ────────────────────────────────────────────────
+
+class _AutoResizeTextEdit(QTextEdit):
+    """QTextEdit, автоматически подстраивающий высоту под содержимое."""
+
+    _MAX_H = 400
+
+    def __init__(self, placeholder: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self.setPlaceholderText(placeholder)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.setAcceptRichText(False)
+        self.setStyleSheet(_TEXTEDIT_STYLE)
+        self.setContentsMargins(0, 0, 0, 0)
+        self.document().setDocumentMargin(0)
+        self.document().documentLayout().documentSizeChanged.connect(
+            lambda _: self._adjust_height()
+        )
+
+    def _adjust_height(self) -> None:
+        vp_w = self.viewport().width()
+        if vp_w <= 0:
+            return
+        doc = self.document()
+        doc.setTextWidth(float(vp_w))
+        doc_h = int(doc.documentLayout().documentSize().height())
+        # CSS padding (2px top + 2px bottom) + border (1px + 1px)
+        h = doc_h + 6
+        h = min(h, self._MAX_H)
+        if self.height() != h:
+            self.setFixedHeight(h)
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001
+        super().resizeEvent(event)
+        self._adjust_height()
+
+    def showEvent(self, event) -> None:  # noqa: ANN001
+        super().showEvent(event)
+        self._adjust_height()
+
+
+# ── Главный класс вкладки ────────────────────────────────────────────────────
 
 class ProjectsTab(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._settings = AppSettings()
         self._projects: list[Project] = []
+        self._archived_projects: list[Project] = []
         self._current: Project | None = None
+        self._showing_archive: bool = False
+        self._card_custom_keys: dict[str, list[str]] = {}
+        self._current_tab_index: int = 0
 
         self.setAcceptDrops(True)
 
@@ -38,14 +308,15 @@ class ProjectsTab(QWidget):
         top = QHBoxLayout()
         root.addLayout(top)
 
-        self.load_btn = QPushButton("Обновить проекты из Excel")
-        self.save_btn = QPushButton("Сохранить изменения")
-        self.add_btn = QPushButton("Добавить проект")
-        self.delete_btn = QPushButton("Удалить проект")
+        self.load_btn = _icon_btn(_SVG_REFRESH, "Обновить проекты из Excel",
+                                  "#ffffff", "#8A9BB0", "#6B7F96", "#556477")
+        self.save_btn = _icon_btn(_SVG_SAVE, "Сохранить изменения",
+                                  "#ffffff", "#8A9BB0", "#6B7F96", "#556477")
+        self.add_btn = _icon_btn(_SVG_ADD, "Добавить проект",
+                                 "#ffffff", "#8A9BB0", "#6B7F96", "#556477")
         top.addWidget(self.load_btn)
         top.addWidget(self.save_btn)
         top.addWidget(self.add_btn)
-        top.addWidget(self.delete_btn)
         top.addStretch(1)
 
         hint = QLabel("Перетащите .json-файл в окно для загрузки проекта")
@@ -53,34 +324,304 @@ class ProjectsTab(QWidget):
         hint.setStyleSheet("color: #888; font-style: italic; font-size: 11px;")
         top.addWidget(hint)
 
-        content = QHBoxLayout()
-        root.addLayout(content, 1)
+        # ── Сплиттер (левый список + правые вкладки) ──────────────────────
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(6)
+        splitter.setChildrenCollapsible(False)
+        root.addWidget(splitter, 1)
 
         self.list = QListWidget(self)
-        self.list.setMinimumWidth(280)
-        content.addWidget(self.list, 0)
+        self.list.setMinimumWidth(160)
+        self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.list.setDragEnabled(True)
+        self.list.setAcceptDrops(True)
+        self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.list.setDefaultDropAction(Qt.DropAction.MoveAction)
+        splitter.addWidget(self.list)
+
+        # ── Вкладки ────────────────────────────────────────────────────────
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_card_tab(), "Карточка")
 
         self.table = QTableWidget(self)
         self.table.setColumnCount(2)
         self.table.setHorizontalHeaderLabels(["Поле", "Значение"])
-        # Заголовки выравниваем по левому краю
         h0 = self.table.horizontalHeaderItem(0)
         h1 = self.table.horizontalHeaderItem(1)
-        if h0 is not None:
+        if h0:
             h0.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        if h1 is not None:
+        if h1:
             h1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        # Редактировать можно только значения (вторая колонка)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.SelectedClicked)
-        content.addWidget(self.table, 1)
+        self.table.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.SelectedClicked
+        )
+        self.tabs.addTab(self.table, "Реквизиты")
 
+        splitter.addWidget(self.tabs)
+        splitter.setSizes([280, 600])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+
+        # ── Сигналы ────────────────────────────────────────────────────────
+        self.list.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.SelectedClicked
+        )
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.load_btn.clicked.connect(self._load_projects)
         self.save_btn.clicked.connect(self._save_all)
         self.add_btn.clicked.connect(self._add_project)
-        self.delete_btn.clicked.connect(self._delete_current)
+        self.list.customContextMenuRequested.connect(self._on_list_context_menu)
         self.list.currentRowChanged.connect(self._select_project)
+        self.list.itemChanged.connect(self._on_list_item_edited)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
-    # ------------------------------------------------------------------ drag & drop
+    # ── Построение вкладки «Карточка» ────────────────────────────────────────
+
+    def _build_card_tab(self) -> QWidget:
+        wrapper = QWidget()
+        outer = QVBoxLayout(wrapper)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: #f4f6f9; }")
+
+        content = QWidget()
+        self._card_content_vbox = QVBoxLayout(content)
+        self._card_content_vbox.setContentsMargins(12, 8, 12, 8)
+        self._card_content_vbox.setSpacing(2)
+
+        # Фиксированные поля
+        self._card_fixed_edits: dict[str, QLineEdit] = {}
+        for field_name in _CARD_FIXED_FIELDS:
+            fw, edit = self._make_fixed_field_row(field_name)
+            self._card_fixed_edits[field_name] = edit
+            self._card_content_vbox.addWidget(fw)
+
+        # Разделитель
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("color: #dde2ea; margin: 2px 0;")
+        self._card_content_vbox.addWidget(sep)
+
+        # Заголовок секции доп. полей
+        extras_header = QHBoxLayout()
+        extras_label = QLabel("Дополнительные поля")
+        extras_label.setStyleSheet("color: #6b7a8d; font-size: 10px; font-weight: 600;")
+        extras_header.addWidget(extras_label)
+        extras_header.addStretch()
+        self._card_content_vbox.addLayout(extras_header)
+
+        # Контейнер для доп. полей
+        self._card_extras_container = QWidget()
+        self._card_extras_container.setStyleSheet("background: transparent;")
+        self._card_extras_vbox = QVBoxLayout(self._card_extras_container)
+        self._card_extras_vbox.setContentsMargins(0, 0, 0, 0)
+        self._card_extras_vbox.setSpacing(2)
+        self._card_content_vbox.addWidget(self._card_extras_container)
+
+        # Кнопка добавления поля
+        add_btn_row = QHBoxLayout()
+        self._card_add_field_btn = QPushButton("+ Добавить поле")
+        self._card_add_field_btn.setStyleSheet(_ADD_FIELD_BTN_STYLE)
+        self._card_add_field_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._card_add_field_btn.clicked.connect(self._add_card_field)
+        add_btn_row.addWidget(self._card_add_field_btn)
+        add_btn_row.addStretch()
+        self._card_content_vbox.addLayout(add_btn_row)
+
+        self._card_content_vbox.addStretch()
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        self._card_custom_rows: list[tuple[QWidget, QLineEdit, _AutoResizeTextEdit]] = []
+        return wrapper
+
+    def _make_fixed_field_row(self, field_name: str) -> tuple[QWidget, QLineEdit]:
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        vbox = QVBoxLayout(row)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(1)
+
+        label = QLabel(field_name.upper())
+        label.setStyleSheet(_CARD_LABEL_CSS)
+
+        edit = QLineEdit()
+        edit.setPlaceholderText("—")
+        edit.setStyleSheet(_FIXED_VALUE_STYLE)
+        edit.setFixedHeight(22)
+
+        vbox.addWidget(label)
+        vbox.addWidget(edit)
+        return row, edit
+
+    def _make_custom_field_row(
+        self, name: str = "", value: str = ""
+    ) -> tuple[QWidget, QLineEdit, _AutoResizeTextEdit]:
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        vbox = QVBoxLayout(row)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(2)
+
+        header = QHBoxLayout()
+        header.setSpacing(2)
+        header.setContentsMargins(0, 0, 0, 0)
+
+        name_edit = QLineEdit(name)
+        name_edit.setPlaceholderText("НАЗВАНИЕ ПОЛЯ")
+        name_edit.setStyleSheet(_CUSTOM_NAME_EDIT_STYLE)
+
+        up_btn = _mini_btn("↑", "Переместить вверх")
+        down_btn = _mini_btn("↓", "Переместить вниз")
+        del_btn = _mini_btn("×", "Удалить поле", _MINI_DEL_BTN_STYLE)
+
+        header.addWidget(name_edit, 1)
+        header.addWidget(up_btn)
+        header.addWidget(down_btn)
+        header.addWidget(del_btn)
+
+        value_edit = _AutoResizeTextEdit(placeholder="—")
+        if value:
+            value_edit.setPlainText(value)
+
+        vbox.addLayout(header)
+        vbox.addWidget(value_edit)
+
+        up_btn.clicked.connect(lambda checked=False, r=row: self._card_field_move_up(r))
+        down_btn.clicked.connect(lambda checked=False, r=row: self._card_field_move_down(r))
+        del_btn.clicked.connect(lambda checked=False, r=row: self._card_field_delete(r))
+
+        return row, name_edit, value_edit
+
+    # ── Карточка: рендер и чтение ─────────────────────────────────────────────
+
+    def _render_card(self, project: Project) -> None:
+        for field_name, edit in self._card_fixed_edits.items():
+            edit.blockSignals(True)
+            edit.setText(project.fields.get(field_name, ""))
+            edit.blockSignals(False)
+
+        # Очищаем старые доп. поля
+        for row_widget, _, _ in self._card_custom_rows:
+            self._card_extras_vbox.removeWidget(row_widget)
+            row_widget.setParent(None)  # type: ignore[arg-type]
+            row_widget.deleteLater()
+        self._card_custom_rows.clear()
+
+        # Создаём новые
+        for key in self._card_custom_keys.get(project.project_id, []):
+            rw, ne, ve = self._make_custom_field_row(name=key, value=project.fields.get(key, ""))
+            self._card_custom_rows.append((rw, ne, ve))
+            self._card_extras_vbox.addWidget(rw)
+
+    def _read_card_into_project(self, project: Project) -> None:
+        for field_name, edit in self._card_fixed_edits.items():
+            project.fields[field_name] = edit.text().strip()
+
+        custom_keys: list[str] = []
+        for _, name_edit, value_edit in self._card_custom_rows:
+            k = name_edit.text().strip()
+            v = value_edit.toPlainText().strip()
+            if k:
+                project.fields[k] = v
+                custom_keys.append(k)
+        self._card_custom_keys[project.project_id] = custom_keys
+
+        row = self.list.currentRow()
+        item = self.list.item(row)
+        if item is not None:
+            self.list.itemChanged.disconnect(self._on_list_item_edited)
+            item.setText(self._project_display_name(project))
+            self.list.itemChanged.connect(self._on_list_item_edited)
+
+    def _clear_card_display(self) -> None:
+        for edit in self._card_fixed_edits.values():
+            edit.blockSignals(True)
+            edit.setText("")
+            edit.blockSignals(False)
+        for row_widget, _, _ in self._card_custom_rows:
+            self._card_extras_vbox.removeWidget(row_widget)
+            row_widget.setParent(None)  # type: ignore[arg-type]
+            row_widget.deleteLater()
+        self._card_custom_rows.clear()
+
+    # ── Карточка: управление доп. полями ──────────────────────────────────────
+
+    def _add_card_field(self) -> None:
+        if self._current is None:
+            return
+        rw, ne, ve = self._make_custom_field_row()
+        self._card_custom_rows.append((rw, ne, ve))
+        self._card_extras_vbox.addWidget(rw)
+        ne.setFocus()
+
+    def _find_custom_row_index(self, row_widget: QWidget) -> int:
+        for i, (w, _, _) in enumerate(self._card_custom_rows):
+            if w is row_widget:
+                return i
+        return -1
+
+    def _swap_custom_row_contents(self, i: int, j: int) -> None:
+        _, ne_i, ve_i = self._card_custom_rows[i]
+        _, ne_j, ve_j = self._card_custom_rows[j]
+        n_i, v_i = ne_i.text(), ve_i.toPlainText()
+        n_j, v_j = ne_j.text(), ve_j.toPlainText()
+        ne_i.setText(n_j)
+        ve_i.setPlainText(v_j)
+        ne_j.setText(n_i)
+        ve_j.setPlainText(v_i)
+
+    def _card_field_move_up(self, row_widget: QWidget) -> None:
+        idx = self._find_custom_row_index(row_widget)
+        if idx <= 0:
+            return
+        self._swap_custom_row_contents(idx, idx - 1)
+
+    def _card_field_move_down(self, row_widget: QWidget) -> None:
+        idx = self._find_custom_row_index(row_widget)
+        if idx < 0 or idx >= len(self._card_custom_rows) - 1:
+            return
+        self._swap_custom_row_contents(idx, idx + 1)
+
+    def _card_field_delete(self, row_widget: QWidget) -> None:
+        idx = self._find_custom_row_index(row_widget)
+        if idx < 0:
+            return
+        self._card_custom_rows.pop(idx)
+        self._card_extras_vbox.removeWidget(row_widget)
+        row_widget.setParent(None)  # type: ignore[arg-type]
+        row_widget.deleteLater()
+
+    # ── Синхронизация вкладок ─────────────────────────────────────────────────
+
+    def _on_tab_changed(self, new_index: int) -> None:
+        if self._current is None:
+            self._current_tab_index = new_index
+            return
+        old_index = self._current_tab_index
+        self._current_tab_index = new_index
+        if old_index == 0:
+            self._read_card_into_project(self._current)
+        else:
+            self._read_table_into_project(self._current)
+        if new_index == 0:
+            self._render_card(self._current)
+        else:
+            self._render_project(self._current)
+
+    def _sync_current_to_project(self) -> None:
+        if self._current is None:
+            return
+        if self._current_tab_index == 0:
+            self._read_card_into_project(self._current)
+        else:
+            self._read_table_into_project(self._current)
+
+    # ── Drag & drop ───────────────────────────────────────────────────────────
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls() and any(
@@ -117,19 +658,30 @@ class ProjectsTab(QWidget):
             QMessageBox.warning(self, "JSON", "Файл должен содержать JSON-объект (словарь полей).")
             return
 
-        project_id = str(data.get("№ дела", "")).strip() or Path(path).stem
+        case_number = str(data.get("№ дела", "") or data.get("Номер дела", "")).strip()
+        project_id = case_number or Path(path).stem
         fields = {str(k): str(v) for k, v in data.items()}
-        project = Project(
-            project_id=project_id,
-            fields=fields,
-            headers=list(fields.keys()),
-        )
+        project = Project(project_id=project_id, fields=fields, headers=list(fields.keys()))
 
         self._projects.append(project)
-        self.list.addItem(self._project_display_name(project))
+        self._add_project_to_list(project)
         self.list.setCurrentRow(len(self._projects) - 1)
 
+    # ── Список проектов ───────────────────────────────────────────────────────
+
+    def _add_project_to_list(self, project: Project, *, archived: bool = False) -> None:
+        item = QListWidgetItem(self._project_display_name(project))
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+        item.setData(Qt.ItemDataRole.UserRole, project)
+        if archived:
+            item.setForeground(QColor("#777777"))
+            item.setBackground(QColor("#f2f2f2"))
+        self.list.addItem(item)
+
     def _project_display_name(self, project: Project) -> str:
+        name = (project.fields.get(PROJECT_NAME_FIELD) or "").strip()
+        if name:
+            return name
         creditor = project.fields.get("Кредитор", "").strip()
         debtor = project.fields.get("Должник", "").strip()
         if creditor and debtor:
@@ -140,6 +692,158 @@ class ProjectsTab(QWidget):
             return debtor
         return project.project_id
 
+    def _on_list_item_edited(self, item: QListWidgetItem) -> None:
+        project = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(project, Project):
+            project.fields[PROJECT_NAME_FIELD] = (item.text() or "").strip()
+
+    def _on_list_context_menu(self, pos: QPoint) -> None:
+        item = self.list.itemAt(pos)
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        if item is None:
+            if self._showing_archive:
+                show_current_action = menu.addAction("Показать текущие проекты")
+            else:
+                show_archive_action = menu.addAction("Показать архивные проекты")
+            global_pos = self.list.mapToGlobal(pos)
+            chosen_action = menu.exec(global_pos)
+            if not chosen_action:
+                return
+            if not self._showing_archive and chosen_action == show_archive_action:
+                self._show_archived_projects()
+            elif self._showing_archive and chosen_action == show_current_action:
+                self._show_current_projects()
+            return
+
+        if self._showing_archive:
+            unarchive_action = menu.addAction("Убрать из архива")
+        else:
+            archive_action = menu.addAction("В архив")
+            delete_action = menu.addAction("Удалить")
+
+        global_pos = self.list.mapToGlobal(pos)
+        chosen_action = menu.exec(global_pos)
+        if not chosen_action:
+            return
+
+        row = self.list.row(item)
+        if row < 0:
+            return
+        self.list.setCurrentRow(row)
+
+        if not self._showing_archive and chosen_action == archive_action:
+            self._archive_current()
+        elif not self._showing_archive and chosen_action == delete_action:
+            self._delete_current()
+        elif self._showing_archive and chosen_action == unarchive_action:
+            self._unarchive_current()
+
+    def _show_current_projects(self) -> None:
+        self._showing_archive = False
+        self.list.clear()
+        for p in self._projects:
+            self._add_project_to_list(p, archived=False)
+        if self._projects:
+            self.list.setCurrentRow(0)
+        else:
+            self._current = None
+            self.table.setRowCount(0)
+            self._clear_card_display()
+
+    def _show_archived_projects(self) -> None:
+        self._showing_archive = True
+        self.list.clear()
+        for p in self._archived_projects:
+            self._add_project_to_list(p, archived=True)
+        if self._archived_projects:
+            self.list.setCurrentRow(0)
+        else:
+            self._current = None
+            self.table.setRowCount(0)
+            self._clear_card_display()
+
+    def _archive_current(self) -> None:
+        if not self._settings.excel_path:
+            QMessageBox.warning(self, "Архив", "Не указан путь к Excel-файлу проектов (см. Настройки).")
+            return
+        row = self.list.currentRow()
+        if row < 0 or row >= self.list.count():
+            QMessageBox.warning(self, "Архив", "Не выбран проект для архивации.")
+            return
+        item = self.list.item(row)
+        if item is None:
+            QMessageBox.warning(self, "Архив", "Не выбран проект для архивации.")
+            return
+        project = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(project, Project):
+            QMessageBox.warning(self, "Архив", "Не удалось определить выбранный проект.")
+            return
+
+        title = self._project_display_name(project)
+        answer = QMessageBox.question(
+            self, "Архивировать проект", f"Переместить проект в архив:\n{title}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            store = ExcelProjectStore(self._settings.excel_path)
+            store.move_project_to_archive(project)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Архив", f"Не удалось архивировать проект:\n{e}")
+            return
+        self._reload_from_excel(keep_mode="current")
+
+    def _unarchive_current(self) -> None:
+        if not self._settings.excel_path:
+            QMessageBox.warning(self, "Архив", "Не указан путь к Excel-файлу проектов (см. Настройки).")
+            return
+        row = self.list.currentRow()
+        if row < 0 or row >= self.list.count():
+            QMessageBox.warning(self, "Архив", "Не выбран проект для восстановления.")
+            return
+        item = self.list.item(row)
+        if item is None:
+            QMessageBox.warning(self, "Архив", "Не выбран проект для восстановления.")
+            return
+        project = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(project, Project):
+            QMessageBox.warning(self, "Архив", "Не удалось определить выбранный проект.")
+            return
+
+        title = self._project_display_name(project)
+        answer = QMessageBox.question(
+            self, "Вернуть из архива", f"Вернуть проект из архива в текущие:\n{title}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            store = ExcelProjectStore(self._settings.excel_path)
+            store.restore_project_from_archive(project)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Архив", f"Не удалось вернуть проект из архива:\n{e}")
+            return
+        self._reload_from_excel(keep_mode="archive")
+
+    def _reload_from_excel(self, *, keep_mode: str = "current") -> None:
+        if not self._settings.excel_path:
+            return
+        try:
+            store = ExcelProjectStore(self._settings.excel_path)
+            self._projects = store.load_projects()
+            self._archived_projects = store.load_projects_from_sheet("Архив")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Проекты", str(e))
+            return
+        if keep_mode == "archive":
+            self._show_archived_projects()
+        else:
+            self._show_current_projects()
+
     def set_settings(self, s: AppSettings) -> None:
         self._settings = s
 
@@ -149,46 +853,64 @@ class ProjectsTab(QWidget):
             return
         try:
             store = ExcelProjectStore(self._settings.excel_path)
+            try:
+                store.repair_archive_headers()
+            except Exception:
+                pass
+
             self._projects = store.load_projects()
+            try:
+                self._archived_projects = store.load_projects_from_sheet("Архив")
+            except Exception:
+                self._archived_projects = []
+
             self.list.clear()
             for p in self._projects:
-                self.list.addItem(self._project_display_name(p))
+                self._add_project_to_list(p, archived=False)
+            self._showing_archive = False
             if self._projects:
                 self.list.setCurrentRow(0)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Проекты", str(e))
 
     def _select_project(self, row: int) -> None:
-        if row < 0 or row >= len(self._projects):
+        if row < 0 or row >= self.list.count():
             self._current = None
             self.table.setRowCount(0)
+            self._clear_card_display()
             return
-        self._current = self._projects[row]
+        item = self.list.item(row)
+        if item is None:
+            self._current = None
+            self.table.setRowCount(0)
+            self._clear_card_display()
+            return
+        project = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(project, Project):
+            self._current = None
+            self.table.setRowCount(0)
+            self._clear_card_display()
+            return
+        self._current = project
         self._render_project(self._current)
+        self._render_card(self._current)
 
     def _render_project(self, project: Project) -> None:
-        # Отображаем поля в том же порядке, что и столбцы Excel:
-        # сначала идем по заголовкам (headers), затем — по оставшимся полям, если они есть.
         headers = getattr(project, "headers", None)
         items: list[tuple[str, str]] = []
         if headers:
-            # Для нового проекта и для проектов с неполным набором полей
-            # проходим по всем заголовкам и подставляем пустое значение,
-            # если в проекте такого поля ещё нет.
             for h in headers:
-                if not h:
+                if not h or h == PROJECT_NAME_FIELD:
                     continue
                 items.append((h, project.fields.get(h, "")))
         else:
-            items = list(project.fields.items())
+            items = [(k, v) for k, v in project.fields.items() if k != PROJECT_NAME_FIELD]
         self.table.setRowCount(len(items))
         for i, (k, v) in enumerate(items):
             key_item = QTableWidgetItem(str(k))
-            # Запрещаем редактирование названий полей
             key_item.setFlags(key_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(i, 0, key_item)
             value_item = QTableWidgetItem(str(v))
-            # Подсветка ключевых полей, пока они пустые
             if k in {"Кредитор", "Должник"} and str(v).strip() == "":
                 value_item.setBackground(QColor("#ffd6e7"))
             self.table.setItem(i, 1, value_item)
@@ -203,39 +925,43 @@ class ProjectsTab(QWidget):
             v = (v_item.text() if v_item else "").strip()
             if k:
                 fields[k] = v
+        if PROJECT_NAME_FIELD in project.fields:
+            fields[PROJECT_NAME_FIELD] = project.fields[PROJECT_NAME_FIELD]
         project.fields = fields
 
     def _add_project(self) -> None:
-        # Создаём пустой проект, который появится только в UI,
-        # пока пользователь не сохранит его в Excel.
         next_index = len(self._projects) + 1
         project = Project(
             project_id=f"Новый проект {next_index}",
             fields={},
-            headers=[h for h in (self._projects[0].headers or [])] if self._projects and self._projects[0].headers else None,
+            headers=[h for h in (self._projects[0].headers or [])]
+            if self._projects and self._projects[0].headers else None,
         )
         self._projects.append(project)
-        self.list.addItem(self._project_display_name(project))
+        self._add_project_to_list(project, archived=False)
         self.list.setCurrentRow(len(self._projects) - 1)
 
     def _delete_current(self) -> None:
         row = self.list.currentRow()
-        if row < 0 or row >= len(self._projects):
+        if row < 0 or row >= self.list.count():
             QMessageBox.warning(self, "Проекты", "Не выбран проект для удаления.")
             return
-
-        project = self._projects[row]
+        item = self.list.item(row)
+        if item is None:
+            QMessageBox.warning(self, "Проекты", "Не выбран проект для удаления.")
+            return
+        project = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(project, Project):
+            QMessageBox.warning(self, "Проекты", "Не удалось определить выбранный проект.")
+            return
         title = self._project_display_name(project)
         answer = QMessageBox.question(
-            self,
-            "Удаление проекта",
-            f"Удалить проект:\n{title}?",
+            self, "Удаление проекта", f"Удалить проект:\n{title}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
 
-        # Если есть путь к Excel и проект связан со строкой в Excel — удаляем и там.
         if self._settings.excel_path and project.row_index is not None:
             try:
                 store = ExcelProjectStore(self._settings.excel_path)
@@ -244,17 +970,17 @@ class ProjectsTab(QWidget):
                 QMessageBox.critical(self, "Проекты", f"Не удалось удалить проект из Excel:\n{e}")
                 return
 
-        # Удаляем из локального списка и UI
-        self._projects.pop(row)
+        if project in self._projects:
+            self._projects.remove(project)
+        self._card_custom_keys.pop(project.project_id, None)
         self.list.takeItem(row)
 
         if self._projects:
-            # Выбираем соседний элемент
-            new_row = min(row, len(self._projects) - 1)
-            self.list.setCurrentRow(new_row)
+            self.list.setCurrentRow(min(row, len(self._projects) - 1))
         else:
             self._current = None
             self.table.setRowCount(0)
+            self._clear_card_display()
 
     def _save_all(self) -> None:
         if not self._settings.excel_path:
@@ -265,17 +991,27 @@ class ProjectsTab(QWidget):
             return
 
         try:
-            # Перед сохранением забираем текущие правки из таблицы
             if self._current is not None:
-                self._read_table_into_project(self._current)
+                self._sync_current_to_project()
+
+            ordered_projects: list[Project] = []
+            for i in range(self.list.count()):
+                item = self.list.item(i)
+                if item is None:
+                    continue
+                p = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(p, Project) and p not in ordered_projects:
+                    ordered_projects.append(p)
+            for p in self._projects:
+                if p not in ordered_projects:
+                    ordered_projects.append(p)
+            self._projects = ordered_projects
 
             store = ExcelProjectStore(self._settings.excel_path)
-            store.save_all_projects(self._projects)
+            store.save_all_projects(self._projects, self._archived_projects)
             QMessageBox.information(
-                self,
-                "Проекты",
+                self, "Проекты",
                 "Все изменения синхронизированы с Excel (с созданием резервной копии).",
             )
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Проекты", str(e))
-
