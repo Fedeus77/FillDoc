@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPoint, QByteArray, QSize
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QIcon, QPixmap, QPainter, QTextOption
+from PySide6.QtCore import Qt, QPoint, QByteArray, QRect, QSize
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QFont, QIcon, QPixmap, QPainter, QTextOption
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -19,6 +20,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QStyle,
+    QStyledItemDelegate,
     QTabWidget,
     QTextEdit,
     QToolButton,
@@ -248,6 +251,74 @@ QPushButton:pressed {
 """
 
 
+# ── Авто-генерация имени проекта ─────────────────────────────────────────────
+
+_LEGAL_FORM_RE = re.compile(
+    r"""
+    ^                                           # начало строки
+    (?:ООО|АО|ПАО|ЗАО|ОАО|НАО|ИП|АНО|НКО|    # аббревиатура ОПФ
+       ФГУП|МУП|ГУП|ГК|ТСЖ|СНТ|ДНТ)
+    [\s\u00A0]*                                 # пробел(ы) после
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+_QUOTES_RE = re.compile(r'^[«"\'„\u201c\u201e](.+)[»"\'"\u201d\u201c]$')
+
+
+def _strip_legal_form(text: str) -> str:
+    """Убирает аббревиатуру ОПФ в начале и декоративные кавычки."""
+    text = text.strip()
+    text = _LEGAL_FORM_RE.sub("", text).strip()
+    m = _QUOTES_RE.match(text)
+    if m:
+        text = m.group(1).strip()
+    return text
+
+
+def _auto_project_name(fields: dict[str, str]) -> str:
+    """Формирует 'Кредитор — Должник' без указания ОПФ."""
+    creditor = _strip_legal_form(fields.get("Кредитор", "").strip())
+    debtor   = _strip_legal_form(fields.get("Должник",  "").strip())
+    if creditor and debtor:
+        return f"{creditor} — {debtor}"
+    return creditor or debtor or ""
+
+
+_PROJECT_LIST_STYLE = """
+QListWidget {
+    background-color: #ffffff;
+    border: 1px solid #dde2ea;
+    border-radius: 8px;
+    outline: 0;
+    padding: 4px 4px;
+}
+QListWidget::item {
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+}
+QScrollBar:vertical {
+    background: #f4f6f9;
+    width: 6px;
+    border-radius: 3px;
+    margin: 4px 2px 4px 2px;
+}
+QScrollBar::handle:vertical {
+    background: #c0cad6;
+    border-radius: 3px;
+    min-height: 24px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #8A9BB0;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical { height: 0px; }
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical { background: none; }
+"""
+
 # ── Вспомогательные функции ──────────────────────────────────────────────────
 
 def _make_icon(svg_src: str, color: str = "#ffffff", size: int = 18) -> QIcon:
@@ -278,6 +349,78 @@ def _mini_btn(text: str, tooltip: str, style: str = _MINI_BTN_STYLE) -> QToolBut
     btn.setStyleSheet(style)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     return btn
+
+
+# ── Делегат списка проектов ───────────────────────────────────────────────────
+
+class _ProjectItemDelegate(QStyledItemDelegate):
+    """Рисует каждый элемент списка проектов как современную карточку."""
+
+    _H = 28          # высота строки
+    _RADIUS = 5      # скругление фона
+    _ACCENT_W = 3    # ширина левой цветной полосы при выборе
+
+    def paint(self, painter: QPainter, option, index) -> None:  # noqa: ANN001
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        is_selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        is_hovered  = bool(option.state & QStyle.StateFlag.State_MouseOver)
+
+        # Archived items have a background role set
+        bg_role = index.data(Qt.ItemDataRole.BackgroundRole)
+        is_archived = bg_role is not None and isinstance(bg_role, QColor)
+
+        rect = option.rect.adjusted(2, 2, -2, -2)
+
+        # ── Фон ──────────────────────────────────────────────────────
+        if is_selected:
+            bg = QColor("#deeaff")
+        elif is_hovered:
+            bg = QColor("#f0f5fb")
+        elif is_archived:
+            bg = QColor("#f5f5f5")
+        else:
+            bg = QColor("#ffffff")
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(bg)
+        painter.drawRoundedRect(rect, self._RADIUS, self._RADIUS)
+
+        # ── Левая акцентная полоса (выбранный элемент) ────────────────
+        if is_selected:
+            accent = QRect(rect.left() + 1, rect.top() + 5,
+                           self._ACCENT_W, rect.height() - 10)
+            painter.setBrush(QColor("#4A90D9"))
+            painter.drawRoundedRect(accent, 1, 1)
+
+        # ── Текст ──────────────────────────────────────────────────────
+        if is_selected:
+            text_color = QColor("#1a3a6b")
+        elif is_archived:
+            text_color = QColor("#8a8a8a")
+        else:
+            text_color = QColor("#1e2a38")
+
+        font = QFont(option.font)
+        font.setPointSizeF(9.0)
+        font.setWeight(QFont.Weight.DemiBold if is_selected else QFont.Weight.Normal)
+        painter.setFont(font)
+        painter.setPen(text_color)
+
+        text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        text_rect = rect.adjusted(14, 0, -8, 0)
+        painter.drawText(
+            text_rect,
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            text,
+        )
+
+        painter.restore()
+
+    def sizeHint(self, option, index) -> QSize:  # noqa: ANN001
+        w = option.rect.width() if option.rect.width() > 0 else 200
+        return QSize(w, self._H)
 
 
 # ── Авто-изменяемый QTextEdit ────────────────────────────────────────────────
@@ -368,12 +511,16 @@ class ProjectsTab(QWidget):
         root.addWidget(splitter, 1)
 
         self.list = QListWidget(self)
-        self.list.setMinimumWidth(160)
+        self.list.setMinimumWidth(180)
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.list.setDragEnabled(True)
         self.list.setAcceptDrops(True)
         self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.list.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.list.setMouseTracking(True)
+        self.list.setStyleSheet(_PROJECT_LIST_STYLE)
+        self.list.setItemDelegate(_ProjectItemDelegate(self.list))
+        self.list.setSpacing(1)
         splitter.addWidget(self.list)
 
         # ── Вкладки ────────────────────────────────────────────────────────
@@ -803,15 +950,14 @@ class ProjectsTab(QWidget):
         name = (project.fields.get(PROJECT_NAME_FIELD) or "").strip()
         if name:
             return name
-        creditor = project.fields.get("Кредитор", "").strip()
-        debtor = project.fields.get("Должник", "").strip()
-        if creditor and debtor:
-            return f"{creditor} — {debtor}"
-        if creditor:
-            return creditor
-        if debtor:
-            return debtor
-        return project.project_id
+        auto = _auto_project_name(project.fields)
+        return auto or project.project_id
+
+    def _refresh_project_name(self, project: Project) -> None:
+        """Пересчитывает 'Имя проекта' из Кредитор и Должник и сохраняет в поля."""
+        auto = _auto_project_name(project.fields)
+        if auto:
+            project.fields[PROJECT_NAME_FIELD] = auto
 
     def _on_list_item_edited(self, item: QListWidgetItem) -> None:
         project = item.data(Qt.ItemDataRole.UserRole)
@@ -985,6 +1131,9 @@ class ProjectsTab(QWidget):
             except Exception:
                 self._archived_projects = []
 
+            for p in self._projects:
+                self._refresh_project_name(p)
+
             self.list.clear()
             for p in self._projects:
                 self._add_project_to_list(p, archived=False)
@@ -1013,6 +1162,7 @@ class ProjectsTab(QWidget):
             self._clear_card_display()
             return
         self._current = project
+        self._refresh_project_name(project)
         self._render_project(self._current)
         self._render_card(self._current)
 
@@ -1114,6 +1264,10 @@ class ProjectsTab(QWidget):
         try:
             if self._current is not None:
                 self._sync_current_to_project()
+
+            # Пересчитываем имена перед сохранением
+            for p in self._projects:
+                self._refresh_project_name(p)
 
             ordered_projects: list[Project] = []
             for i in range(self.list.count()):
