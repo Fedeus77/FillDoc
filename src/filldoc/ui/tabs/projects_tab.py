@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QPoint, QByteArray, QSize
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QIcon, QPixmap, QPainter
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QIcon, QPixmap, QPainter, QTextOption
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTabWidget,
     QTextEdit,
@@ -43,6 +44,13 @@ _CARD_FIXED_FIELDS = [
     "Номер листа и дата",
     "Номер ИП",
 ]
+
+_CARD_FIELD_COL_MIN_W = 150
+_CARD_FIELD_COL_MAX_W = 360
+_CARD_FIELD_COL_DEFAULT_W = 190
+_CARD_VALUE_COL_MIN_W = 220
+_CARD_COL_GAP = 0
+_CARD_COL_STEP = 12
 
 # ── SVG-иконки ──────────────────────────────────────────────────────────────
 
@@ -125,29 +133,55 @@ QLineEdit:focus {
 """
 
 _CARD_LABEL_CSS = (
-    "color: #9aa8b8; font-size: 9px; font-weight: 700; "
-    "letter-spacing: 1px; padding: 0; margin: 0;"
+    "color: #5b6a7a; font-size: 11px; font-weight: 600; "
+    "padding: 0; margin: 0;"
 )
 
 _CUSTOM_NAME_EDIT_STYLE = """
 QLineEdit {
-    color: #9aa8b8;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 1px;
-    background: transparent;
-    border: none;
-    border-bottom: 1px dashed #c8d4e0;
-    border-radius: 0;
-    padding: 0 2px 1px 0;
-    min-height: 16px;
+    color: #5b6a7a;
+    font-size: 11px;
+    font-weight: 600;
+    background: #ffffff;
+    border: 1px solid #dde2ea;
+    border-radius: 4px;
+    padding: 1px 6px;
+    min-height: 22px;
 }
 QLineEdit:focus {
     color: #4a7ab5;
-    border-bottom-color: #5b9bd5;
+    border-color: #5b9bd5;
+    background-color: #fafcff;
 }
 QLineEdit:hover {
-    border-bottom-color: #9ab4cc;
+    border-color: #b9c9da;
+}
+"""
+
+_CARD_COL_HEADER_CSS = (
+    "color: #8fa0b3; font-size: 10px; font-weight: 700; "
+    "letter-spacing: 0.5px; padding: 0 0 2px 0;"
+)
+
+_CARD_DIVIDER_BTN_STYLE = """
+QToolButton {
+    background: transparent;
+    border: none;
+    color: #9fb0c2;
+    font-size: 10px;
+    min-width:  14px;
+    min-height: 18px;
+    max-width:  14px;
+    max-height: 18px;
+    padding: 0;
+}
+QToolButton:hover {
+    background: #e8edf3;
+    color: #5b6a7a;
+    border-radius: 4px;
+}
+QToolButton:pressed {
+    background: #dbe3ec;
 }
 """
 
@@ -259,6 +293,7 @@ class _AutoResizeTextEdit(QTextEdit):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         self.setAcceptRichText(False)
         self.setStyleSheet(_TEXTEDIT_STYLE)
         self.setContentsMargins(0, 0, 0, 0)
@@ -301,6 +336,8 @@ class ProjectsTab(QWidget):
         self._showing_archive: bool = False
         self._card_custom_keys: dict[str, list[str]] = {}
         self._current_tab_index: int = 0
+        self._card_field_col_width: int = _CARD_FIELD_COL_DEFAULT_W
+        self._card_content_widget: QWidget | None = None
 
         self.setAcceptDrops(True)
 
@@ -388,9 +425,43 @@ class ProjectsTab(QWidget):
         scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: #f4f6f9; }")
 
         content = QWidget()
+        self._card_content_widget = content
         self._card_content_vbox = QVBoxLayout(content)
         self._card_content_vbox.setContentsMargins(12, 8, 12, 8)
-        self._card_content_vbox.setSpacing(2)
+        self._card_content_vbox.setSpacing(5)
+        self._card_left_col_widgets: list[QWidget] = []
+
+        # Заголовки колонок
+        cols_header = QWidget()
+        cols_header.setStyleSheet("background: transparent;")
+        cols_header_h = QHBoxLayout(cols_header)
+        cols_header_h.setContentsMargins(0, 0, 0, 0)
+        cols_header_h.setSpacing(_CARD_COL_GAP)
+
+        left_col_header = QLabel("Поле")
+        left_col_header.setStyleSheet(_CARD_COL_HEADER_CSS)
+        right_col_header = QLabel("Значение")
+        right_col_header.setStyleSheet(_CARD_COL_HEADER_CSS)
+
+        divider_controls = QWidget()
+        divider_controls_h = QHBoxLayout(divider_controls)
+        divider_controls_h.setContentsMargins(0, 0, 0, 0)
+        divider_controls_h.setSpacing(0)
+        divider_controls.setStyleSheet("background: transparent;")
+
+        divider_left_btn = _mini_btn("◀", "Сдвинуть границу влево", _CARD_DIVIDER_BTN_STYLE)
+        divider_right_btn = _mini_btn("▶", "Сдвинуть границу вправо", _CARD_DIVIDER_BTN_STYLE)
+        divider_left_btn.clicked.connect(lambda checked=False: self._shift_card_divider(-_CARD_COL_STEP))
+        divider_right_btn.clicked.connect(lambda checked=False: self._shift_card_divider(_CARD_COL_STEP))
+
+        divider_controls_h.addWidget(divider_left_btn)
+        divider_controls_h.addWidget(divider_right_btn)
+
+        cols_header_h.addWidget(left_col_header)
+        cols_header_h.addWidget(divider_controls)
+        cols_header_h.addWidget(right_col_header, 1)
+        self._card_content_vbox.addWidget(cols_header)
+        self._register_card_left_widget(left_col_header)
 
         # Фиксированные поля
         self._card_fixed_edits: dict[str, QLineEdit] = {}
@@ -408,7 +479,7 @@ class ProjectsTab(QWidget):
         # Заголовок секции доп. полей
         extras_header = QHBoxLayout()
         extras_label = QLabel("Дополнительные поля")
-        extras_label.setStyleSheet("color: #6b7a8d; font-size: 10px; font-weight: 600;")
+        extras_label.setStyleSheet("color: #6b7a8d; font-size: 10px; font-weight: 700;")
         extras_header.addWidget(extras_label)
         extras_header.addStretch()
         self._card_content_vbox.addLayout(extras_header)
@@ -419,6 +490,7 @@ class ProjectsTab(QWidget):
         self._card_extras_vbox = QVBoxLayout(self._card_extras_container)
         self._card_extras_vbox.setContentsMargins(0, 0, 0, 0)
         self._card_extras_vbox.setSpacing(2)
+        self._card_extras_vbox.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._card_content_vbox.addWidget(self._card_extras_container)
 
         # Кнопка добавления поля
@@ -437,25 +509,27 @@ class ProjectsTab(QWidget):
         outer.addWidget(scroll)
 
         self._card_custom_rows: list[tuple[QWidget, QLineEdit, _AutoResizeTextEdit]] = []
+        self._set_card_field_col_width(self._card_field_col_width)
         return wrapper
 
     def _make_fixed_field_row(self, field_name: str) -> tuple[QWidget, QLineEdit]:
         row = QWidget()
         row.setStyleSheet("background: transparent;")
-        vbox = QVBoxLayout(row)
-        vbox.setContentsMargins(0, 0, 0, 0)
-        vbox.setSpacing(1)
+        hbox = QHBoxLayout(row)
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.setSpacing(_CARD_COL_GAP)
 
-        label = QLabel(field_name.upper())
+        label = QLabel(field_name)
         label.setStyleSheet(_CARD_LABEL_CSS)
+        self._register_card_left_widget(label)
 
         edit = QLineEdit()
         edit.setPlaceholderText("—")
         edit.setStyleSheet(_FIXED_VALUE_STYLE)
         edit.setFixedHeight(22)
 
-        vbox.addWidget(label)
-        vbox.addWidget(edit)
+        hbox.addWidget(label)
+        hbox.addWidget(edit, 1)
         return row, edit
 
     def _make_custom_field_row(
@@ -463,33 +537,46 @@ class ProjectsTab(QWidget):
     ) -> tuple[QWidget, QLineEdit, _AutoResizeTextEdit]:
         row = QWidget()
         row.setStyleSheet("background: transparent;")
-        vbox = QVBoxLayout(row)
-        vbox.setContentsMargins(0, 0, 0, 0)
-        vbox.setSpacing(2)
+        row.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        hbox = QHBoxLayout(row)
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.setSpacing(_CARD_COL_GAP)
+        hbox.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        header = QHBoxLayout()
-        header.setSpacing(2)
-        header.setContentsMargins(0, 0, 0, 0)
+        field_cell = QWidget()
+        field_cell_h = QHBoxLayout(field_cell)
+        field_cell_h.setSpacing(1)
+        field_cell_h.setContentsMargins(0, 0, 0, 0)
+        field_cell_h.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._register_card_left_widget(field_cell)
+        row.setProperty("_left_col_widget", field_cell)
 
         name_edit = QLineEdit(name)
-        name_edit.setPlaceholderText("НАЗВАНИЕ ПОЛЯ")
+        name_edit.setPlaceholderText("Название поля")
         name_edit.setStyleSheet(_CUSTOM_NAME_EDIT_STYLE)
 
         up_btn = _mini_btn("↑", "Переместить вверх")
         down_btn = _mini_btn("↓", "Переместить вниз")
         del_btn = _mini_btn("×", "Удалить поле", _MINI_DEL_BTN_STYLE)
 
-        header.addWidget(name_edit, 1)
-        header.addWidget(up_btn)
-        header.addWidget(down_btn)
-        header.addWidget(del_btn)
+        field_cell_h.addWidget(name_edit, 1)
 
         value_edit = _AutoResizeTextEdit(placeholder="—")
         if value:
             value_edit.setPlainText(value)
 
-        vbox.addLayout(header)
-        vbox.addWidget(value_edit)
+        controls_cell = QWidget()
+        controls_h = QHBoxLayout(controls_cell)
+        controls_h.setContentsMargins(1, 0, 0, 0)
+        controls_h.setSpacing(1)
+        controls_h.setAlignment(Qt.AlignmentFlag.AlignTop)
+        controls_h.addWidget(up_btn)
+        controls_h.addWidget(down_btn)
+        controls_h.addWidget(del_btn)
+
+        hbox.addWidget(field_cell)
+        hbox.addWidget(value_edit, 1)
+        hbox.addWidget(controls_cell)
 
         up_btn.clicked.connect(lambda checked=False, r=row: self._card_field_move_up(r))
         down_btn.clicked.connect(lambda checked=False, r=row: self._card_field_move_down(r))
@@ -508,6 +595,9 @@ class ProjectsTab(QWidget):
         # Очищаем старые доп. поля
         for row_widget, _, _ in self._card_custom_rows:
             self._card_extras_vbox.removeWidget(row_widget)
+            left_col_widget = row_widget.property("_left_col_widget")
+            if isinstance(left_col_widget, QWidget):
+                self._unregister_card_left_widget(left_col_widget)
             row_widget.setParent(None)  # type: ignore[arg-type]
             row_widget.deleteLater()
         self._card_custom_rows.clear()
@@ -545,6 +635,9 @@ class ProjectsTab(QWidget):
             edit.blockSignals(False)
         for row_widget, _, _ in self._card_custom_rows:
             self._card_extras_vbox.removeWidget(row_widget)
+            left_col_widget = row_widget.property("_left_col_widget")
+            if isinstance(left_col_widget, QWidget):
+                self._unregister_card_left_widget(left_col_widget)
             row_widget.setParent(None)  # type: ignore[arg-type]
             row_widget.deleteLater()
         self._card_custom_rows.clear()
@@ -593,8 +686,36 @@ class ProjectsTab(QWidget):
             return
         self._card_custom_rows.pop(idx)
         self._card_extras_vbox.removeWidget(row_widget)
+        left_col_widget = row_widget.property("_left_col_widget")
+        if isinstance(left_col_widget, QWidget):
+            self._unregister_card_left_widget(left_col_widget)
         row_widget.setParent(None)  # type: ignore[arg-type]
         row_widget.deleteLater()
+
+    def _register_card_left_widget(self, widget: QWidget) -> None:
+        self._card_left_col_widgets.append(widget)
+        widget.setFixedWidth(self._card_field_col_width)
+
+    def _unregister_card_left_widget(self, widget: QWidget) -> None:
+        if widget in self._card_left_col_widgets:
+            self._card_left_col_widgets.remove(widget)
+
+    def _set_card_field_col_width(self, width: int) -> None:
+        width = max(_CARD_FIELD_COL_MIN_W, min(_CARD_FIELD_COL_MAX_W, int(width)))
+        if self._card_content_widget is not None:
+            available = self._card_content_widget.width()
+            max_by_window = available - _CARD_VALUE_COL_MIN_W - 28
+            width = min(width, max(_CARD_FIELD_COL_MIN_W, max_by_window))
+        self._card_field_col_width = width
+        for widget in self._card_left_col_widgets:
+            widget.setFixedWidth(width)
+
+    def _shift_card_divider(self, delta: int) -> None:
+        self._set_card_field_col_width(self._card_field_col_width + delta)
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001
+        super().resizeEvent(event)
+        self._set_card_field_col_width(self._card_field_col_width)
 
     # ── Синхронизация вкладок ─────────────────────────────────────────────────
 
