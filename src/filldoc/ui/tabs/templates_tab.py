@@ -284,7 +284,7 @@ class TemplatesTab(QWidget):
     @staticmethod
     def _project_display_name(p: Project) -> str:
         """Returns a human-readable label for the project combo box."""
-        for key in ("Имя проекта", "Номер дела", "№ дела", "№дела"):
+        for key in ("Имя проекта", "Номер осн. дела", "Номер дела", "№ дела", "№дела"):
             val = p.fields.get(key, "").strip()
             if val:
                 return val

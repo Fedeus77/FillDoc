@@ -43,10 +43,13 @@ _CARD_FIXED_FIELDS = [
     "Имя проекта",
     "ИНН кредитора",
     "ИНН должника",
-    "Номер дела",
+    "Номер осн. дела",
     "Номер листа и дата",
     "Номер ИП",
 ]
+
+_CASE_NUMBER_FIELD_NEW = "Номер осн. дела"
+_CASE_NUMBER_FIELD_OLD = "Номер дела"
 
 _CARD_FIELD_COL_MIN_W = 150
 _CARD_FIELD_COL_MAX_W = 360
@@ -659,14 +662,19 @@ class ProjectsTab(QWidget):
         self._set_card_field_col_width(self._card_field_col_width)
         return wrapper
 
-    def _make_fixed_field_row(self, field_name: str) -> tuple[QWidget, QLineEdit]:
+    def _make_fixed_field_row(
+        self,
+        field_name: str,
+        *,
+        label_text: str | None = None,
+    ) -> tuple[QWidget, QLineEdit]:
         row = QWidget()
         row.setStyleSheet("background: transparent;")
         hbox = QHBoxLayout(row)
         hbox.setContentsMargins(0, 0, 0, 0)
         hbox.setSpacing(_CARD_COL_GAP)
 
-        label = QLabel(field_name)
+        label = QLabel(label_text or field_name)
         label.setStyleSheet(_CARD_LABEL_CSS)
         self._register_card_left_widget(label)
 
@@ -736,7 +744,16 @@ class ProjectsTab(QWidget):
     def _render_card(self, project: Project) -> None:
         for field_name, edit in self._card_fixed_edits.items():
             edit.blockSignals(True)
-            edit.setText(project.fields.get(field_name, ""))
+            if field_name == _CASE_NUMBER_FIELD_NEW:
+                val = project.fields.get(_CASE_NUMBER_FIELD_NEW, "").strip()
+                if not val:
+                    val = project.fields.get(_CASE_NUMBER_FIELD_OLD, "").strip()
+                    if val:
+                        # Мягкая миграция: чтобы реквизиты/таблица тоже видели новое имя
+                        project.fields[_CASE_NUMBER_FIELD_NEW] = val
+                edit.setText(val)
+            else:
+                edit.setText(project.fields.get(field_name, ""))
             edit.blockSignals(False)
 
         # Очищаем старые доп. поля
@@ -757,7 +774,15 @@ class ProjectsTab(QWidget):
 
     def _read_card_into_project(self, project: Project) -> None:
         for field_name, edit in self._card_fixed_edits.items():
-            project.fields[field_name] = edit.text().strip()
+            val = edit.text().strip()
+            if field_name == _CASE_NUMBER_FIELD_NEW:
+                project.fields[_CASE_NUMBER_FIELD_NEW] = val
+                # Для совместимости: если в Excel/шапках есть старое поле — держим в синхроне
+                headers = getattr(project, "headers", None) or []
+                if _CASE_NUMBER_FIELD_OLD in headers or _CASE_NUMBER_FIELD_OLD in project.fields:
+                    project.fields[_CASE_NUMBER_FIELD_OLD] = val
+            else:
+                project.fields[field_name] = val
 
         custom_keys: list[str] = []
         for _, name_edit, value_edit in self._card_custom_rows:
