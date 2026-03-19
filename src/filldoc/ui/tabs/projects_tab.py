@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPoint, QByteArray, QRect, QSize
+from PySide6.QtCore import Qt, QPoint, QByteArray, QRect, QSize, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QFont, QIcon, QPixmap, QPainter, QTextOption
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -85,6 +88,22 @@ _SVG_ADD = """
   <circle cx="12" cy="12" r="10"/>
   <line x1="12" y1="8" x2="12" y2="16"/>
   <line x1="8"  y1="12" x2="16" y2="12"/>
+</svg>"""
+
+_SVG_FOLDER = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2.2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+</svg>"""
+
+_SVG_UPLOAD = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2.2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <polyline points="16 16 12 12 8 16"/>
+  <line x1="12" y1="12" x2="12" y2="21"/>
+  <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
 </svg>"""
 
 # ── Стили ────────────────────────────────────────────────────────────────────
@@ -426,6 +445,68 @@ class _ProjectItemDelegate(QStyledItemDelegate):
         return QSize(w, self._H)
 
 
+# ── Зона перетаскивания файлов ────────────────────────────────────────────────
+
+class _DropZone(QFrame):
+    """Зона для перетаскивания файлов в папку документов."""
+
+    file_dropped = Signal(str)
+
+    _NORMAL_STYLE = """
+QFrame {
+    background-color: #f8fafe;
+    border: 2px dashed #c0cfe0;
+    border-radius: 8px;
+}
+"""
+    _HOVER_STYLE = """
+QFrame {
+    background-color: #eef5fc;
+    border: 2px dashed #4A90D9;
+    border-radius: 8px;
+}
+"""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(72)
+        self.setMaximumHeight(90)
+        self.setStyleSheet(self._NORMAL_STYLE)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self._label = QLabel("Перетащите файл сюда для добавления в папку")
+        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._label.setStyleSheet(
+            "color: #7a90a8; font-size: 11px; background: transparent; border: none;"
+        )
+        layout.addWidget(self._label)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasUrls():
+            self.setStyleSheet(self._HOVER_STYLE)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: ANN001
+        self.setStyleSheet(self._NORMAL_STYLE)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self.setStyleSheet(self._NORMAL_STYLE)
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if path and Path(path).is_file():
+                self.file_dropped.emit(path)
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+
 # ── Авто-изменяемый QTextEdit ────────────────────────────────────────────────
 
 class _AutoResizeTextEdit(QTextEdit):
@@ -543,6 +624,7 @@ class ProjectsTab(QWidget):
             QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.SelectedClicked
         )
         self.tabs.addTab(self.table, "Реквизиты")
+        self.tabs.addTab(self._build_docs_tab(), "Документы")
 
         splitter.addWidget(self.tabs)
         splitter.setSizes([280, 600])
@@ -899,19 +981,22 @@ class ProjectsTab(QWidget):
         self._current_tab_index = new_index
         if old_index == 0:
             self._read_card_into_project(self._current)
-        else:
+        elif old_index == 1:
             self._read_table_into_project(self._current)
         if new_index == 0:
             self._render_card(self._current)
-        else:
+        elif new_index == 1:
             self._render_project(self._current)
+        elif new_index == 2:
+            self._load_project_docs_path()
+            self._refresh_docs_list()
 
     def _sync_current_to_project(self) -> None:
         if self._current is None:
             return
         if self._current_tab_index == 0:
             self._read_card_into_project(self._current)
-        else:
+        elif self._current_tab_index == 1:
             self._read_table_into_project(self._current)
 
     # ── Drag & drop ───────────────────────────────────────────────────────────
@@ -1138,6 +1223,10 @@ class ProjectsTab(QWidget):
 
     def set_settings(self, s: AppSettings) -> None:
         self._settings = s
+        if hasattr(self, "_docs_path_edit"):
+            self._load_project_docs_path()
+            if self._current_tab_index == 2:
+                self._refresh_docs_list()
 
     def _load_projects(self) -> None:
         if not self._settings.excel_path:
@@ -1190,6 +1279,10 @@ class ProjectsTab(QWidget):
         self._refresh_project_name(project)
         self._render_project(self._current)
         self._render_card(self._current)
+        if hasattr(self, "_docs_path_edit"):
+            self._load_project_docs_path()
+            if self._current_tab_index == 2:
+                self._refresh_docs_list()
 
     def _render_project(self, project: Project) -> None:
         headers = getattr(project, "headers", None)
@@ -1315,3 +1408,249 @@ class ProjectsTab(QWidget):
             )
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Проекты", str(e))
+
+    # ── Вкладка «Документы» ───────────────────────────────────────────────────
+
+    def _build_docs_tab(self) -> QWidget:
+        widget = QWidget()
+        vbox = QVBoxLayout(widget)
+        vbox.setContentsMargins(10, 8, 10, 8)
+        vbox.setSpacing(6)
+
+        # Строка выбора папки
+        path_row = QHBoxLayout()
+        path_row.setSpacing(6)
+        path_label = QLabel("Папка:")
+        path_label.setStyleSheet(
+            "color: #5b6a7a; font-size: 11px; font-weight: 600; min-width: 42px;"
+        )
+        self._docs_path_edit = QLineEdit()
+        self._docs_path_edit.setPlaceholderText("Путь к папке документов для этого проекта…")
+        self._docs_path_edit.setStyleSheet(_FIXED_VALUE_STYLE)
+
+        browse_docs_btn = QPushButton("Выбрать…")
+        browse_docs_btn.setStyleSheet("""
+QPushButton {
+    background: #f0f4f8;
+    border: 1px solid #c5d0dc;
+    border-radius: 4px;
+    padding: 2px 10px;
+    font-size: 11px;
+    color: #3a5a78;
+    min-height: 22px;
+}
+QPushButton:hover { background: #e0eaf4; }
+QPushButton:pressed { background: #d0dce8; }
+""")
+        browse_docs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        open_folder_btn = _icon_btn(
+            _SVG_FOLDER, "Открыть папку в проводнике",
+            "#ffffff", "#5b9bd5", "#4a7ec0", "#3a6aaa",
+        )
+
+        path_row.addWidget(path_label)
+        path_row.addWidget(self._docs_path_edit, 1)
+        path_row.addWidget(browse_docs_btn)
+        path_row.addWidget(open_folder_btn)
+        vbox.addLayout(path_row)
+
+        # Зона перетаскивания
+        self._docs_drop_zone = _DropZone()
+        self._docs_drop_zone.file_dropped.connect(self._on_file_dropped)
+        vbox.addWidget(self._docs_drop_zone)
+
+        # Подзаголовок списка файлов
+        files_header = QHBoxLayout()
+        files_label = QLabel("Файлы в папке")
+        files_label.setStyleSheet(
+            "color: #6b7a8d; font-size: 10px; font-weight: 700; letter-spacing: 0.3px;"
+        )
+        hint_label = QLabel("двойной клик — переименовать")
+        hint_label.setStyleSheet("color: #aab5c2; font-size: 10px; font-style: italic;")
+        refresh_docs_btn = _mini_btn("↻", "Обновить список файлов")
+        files_header.addWidget(files_label)
+        files_header.addWidget(hint_label)
+        files_header.addStretch()
+        files_header.addWidget(refresh_docs_btn)
+        vbox.addLayout(files_header)
+
+        # Список файлов
+        self._docs_list = QListWidget()
+        self._docs_list.setStyleSheet("""
+QListWidget {
+    background-color: #ffffff;
+    border: 1px solid #dde2ea;
+    border-radius: 6px;
+    padding: 3px;
+    font-size: 12px;
+    outline: 0;
+}
+QListWidget::item {
+    padding: 4px 8px;
+    border-radius: 3px;
+}
+QListWidget::item:selected {
+    background: #deeaff;
+    color: #1a3a6b;
+}
+QListWidget::item:hover {
+    background: #f0f5fb;
+}
+QScrollBar:vertical {
+    background: #f4f6f9;
+    width: 6px;
+    border-radius: 3px;
+    margin: 4px 2px;
+}
+QScrollBar::handle:vertical {
+    background: #c0cad6;
+    border-radius: 3px;
+    min-height: 24px;
+}
+QScrollBar::handle:vertical:hover { background: #8A9BB0; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+""")
+        self._docs_list.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.SelectedClicked
+        )
+        vbox.addWidget(self._docs_list, 1)
+
+        # Подключаем сигналы
+        browse_docs_btn.clicked.connect(self._browse_docs_dir)
+        open_folder_btn.clicked.connect(self._open_docs_folder)
+        self._docs_path_edit.editingFinished.connect(self._on_docs_path_changed)
+        self._docs_list.itemChanged.connect(self._on_doc_renamed)
+        refresh_docs_btn.clicked.connect(self._refresh_docs_list)
+
+        return widget
+
+    def _refresh_docs_list(self) -> None:
+        """Обновляет список файлов из текущей папки документов."""
+        docs_path = self._docs_path_edit.text().strip()
+        self._docs_list.blockSignals(True)
+        self._docs_list.clear()
+        if docs_path:
+            p = Path(docs_path)
+            if p.is_dir():
+                try:
+                    files = sorted(
+                        (f for f in p.iterdir() if f.is_file()),
+                        key=lambda x: x.name.lower(),
+                    )
+                    for f in files:
+                        item = QListWidgetItem(f.name)
+                        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                        item.setData(Qt.ItemDataRole.UserRole, str(f))
+                        self._docs_list.addItem(item)
+                except Exception as e:  # noqa: BLE001
+                    QMessageBox.warning(
+                        self, "Документы",
+                        f"Не удалось прочитать содержимое папки:\n{e}",
+                    )
+        self._docs_list.blockSignals(False)
+
+    def _on_file_dropped(self, src_path: str) -> None:
+        """Копирует перетащенный файл в папку документов."""
+        docs_dir = self._docs_path_edit.text().strip()
+        if not docs_dir:
+            QMessageBox.warning(
+                self, "Документы",
+                "Укажите папку для сохранения документов.",
+            )
+            return
+        dst_dir = Path(docs_dir)
+        if not dst_dir.is_dir():
+            QMessageBox.warning(
+                self, "Документы",
+                f"Папка не найдена:\n{docs_dir}",
+            )
+            return
+        src = Path(src_path)
+        dst = dst_dir / src.name
+        if dst.exists():
+            counter = 1
+            while True:
+                candidate = dst_dir / f"{src.stem} ({counter}){src.suffix}"
+                if not candidate.exists():
+                    dst = candidate
+                    break
+                counter += 1
+        try:
+            shutil.copy2(str(src), str(dst))
+            self._refresh_docs_list()
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Документы", f"Не удалось скопировать файл:\n{e}")
+
+    def _on_doc_renamed(self, item: QListWidgetItem) -> None:
+        """Переименовывает файл на диске при изменении имени в списке."""
+        old_path_str = item.data(Qt.ItemDataRole.UserRole)
+        if not old_path_str:
+            return
+        old_path = Path(old_path_str)
+        new_name = item.text().strip()
+        if not new_name or new_name == old_path.name:
+            return
+        new_path = old_path.parent / new_name
+        try:
+            old_path.rename(new_path)
+            item.setData(Qt.ItemDataRole.UserRole, str(new_path))
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Переименование", f"Не удалось переименовать файл:\n{e}")
+            self._docs_list.blockSignals(True)
+            item.setText(old_path.name)
+            self._docs_list.blockSignals(False)
+
+    def _browse_docs_dir(self) -> None:
+        """Открывает диалог выбора папки для документов."""
+        current = self._docs_path_edit.text().strip()
+        path = QFileDialog.getExistingDirectory(
+            self, "Выбор папки с документами",
+            current if current else str(Path.home()),
+        )
+        if path:
+            self._docs_path_edit.setText(path)
+            self._on_docs_path_changed()
+
+    def _open_docs_folder(self) -> None:
+        """Открывает папку документов в проводнике."""
+        path = self._docs_path_edit.text().strip()
+        if not path:
+            QMessageBox.information(
+                self, "Открыть папку",
+                "Укажите путь к папке с документами.",
+            )
+            return
+        p = Path(path)
+        if not p.is_dir():
+            QMessageBox.warning(self, "Открыть папку", f"Папка не найдена:\n{path}")
+            return
+        try:
+            os.startfile(str(p))  # type: ignore[attr-defined]
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(self, "Открыть папку", f"Не удалось открыть папку:\n{e}")
+
+    def _load_project_docs_path(self) -> None:
+        """Подставляет в поле пути папку документов текущего проекта."""
+        if self._current is not None:
+            path = self._settings.project_docs_dirs.get(
+                self._current.project_id,
+                self._settings.docs_dir,
+            )
+        else:
+            path = ""
+        self._docs_path_edit.blockSignals(True)
+        self._docs_path_edit.setText(path)
+        self._docs_path_edit.blockSignals(False)
+
+    def _on_docs_path_changed(self) -> None:
+        """Сохраняет путь к папке документов для текущего проекта и обновляет список."""
+        path = self._docs_path_edit.text().strip()
+        if self._current is not None:
+            self._settings.project_docs_dirs[self._current.project_id] = path
+        try:
+            self._settings.save()
+        except Exception:  # noqa: BLE001
+            pass
+        self._refresh_docs_list()

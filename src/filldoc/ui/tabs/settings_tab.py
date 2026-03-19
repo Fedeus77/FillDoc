@@ -31,10 +31,12 @@ class SettingsTab(QWidget):
         self.excel_edit = QLineEdit(self._settings.excel_path)
         self.templates_edit = QLineEdit(self._settings.templates_dir)
         self.output_edit = QLineEdit(self._settings.output_dir)
+        self.docs_dir_edit = QLineEdit(self._settings.docs_dir)
 
         form.addRow("Excel-файл проектов:", self._path_row(self.excel_edit, is_file=True))
         form.addRow("Папка шаблонов:", self._path_row(self.templates_edit, is_file=False))
         form.addRow("Папка выгрузки:", self._path_row(self.output_edit, is_file=False))
+        form.addRow("Папка документов (по умолчанию):", self._path_row(self.docs_dir_edit, is_file=False))
 
         btns = QHBoxLayout()
         root.addLayout(btns)
@@ -74,6 +76,7 @@ class SettingsTab(QWidget):
             excel_path=self.excel_edit.text().strip(),
             templates_dir=self.templates_edit.text().strip(),
             output_dir=self.output_edit.text().strip(),
+            docs_dir=self.docs_dir_edit.text().strip(),
         )
 
     def _save(self) -> None:

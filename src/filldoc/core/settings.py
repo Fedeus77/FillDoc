@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
 from .errors import SettingsError
@@ -20,6 +20,9 @@ class AppSettings:
     excel_path: str = ""
     templates_dir: str = ""
     output_dir: str = ""
+    docs_dir: str = ""
+    # Пути к папкам документов для каждого проекта: {project_id: path}
+    project_docs_dirs: dict = field(default_factory=dict)
 
     @staticmethod
     def load() -> "AppSettings":
@@ -28,10 +31,13 @@ class AppSettings:
             return AppSettings()
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            raw_dirs = data.get("project_docs_dirs", {})
             return AppSettings(
                 excel_path=str(data.get("excel_path", "")),
                 templates_dir=str(data.get("templates_dir", "")),
                 output_dir=str(data.get("output_dir", "")),
+                docs_dir=str(data.get("docs_dir", "")),
+                project_docs_dirs=raw_dirs if isinstance(raw_dirs, dict) else {},
             )
         except Exception as e:  # noqa: BLE001
             raise SettingsError(f"Не удалось прочитать настройки: {e}") from e
