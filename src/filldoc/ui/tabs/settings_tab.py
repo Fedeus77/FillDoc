@@ -77,10 +77,18 @@ class SettingsTab(QWidget):
             templates_dir=self.templates_edit.text().strip(),
             output_dir=self.output_edit.text().strip(),
             docs_dir=self.docs_dir_edit.text().strip(),
+            project_docs_dirs=dict(self._settings.project_docs_dirs),
         )
 
     def _save(self) -> None:
         self._settings = self.get_settings()
+        # Дочитываем project_docs_dirs из файла — их могли обновить другие вкладки
+        # напрямую (не через settings_tab), чтобы не затереть сохранённые пути.
+        try:
+            on_disk = AppSettings.load()
+            self._settings.project_docs_dirs.update(on_disk.project_docs_dirs)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self._settings.save()
             self.settings_changed.emit()

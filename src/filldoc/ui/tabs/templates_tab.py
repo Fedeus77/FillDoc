@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QByteArray, QSize
+from PySide6.QtCore import Qt, QByteArray, QSize, QTimer
 from PySide6.QtGui import QIcon, QPixmap, QPainter
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
@@ -56,6 +56,13 @@ _SVG_SAVE = """
   <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
   <polyline points="17 21 17 13 7 13 7 21"/>
   <polyline points="7 3 7 8 15 8"/>
+</svg>"""
+
+_SVG_FOLDER = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2.0"
+     stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
 </svg>"""
 
 # ── Стили ────────────────────────────────────────────────────────────────────
@@ -207,6 +214,11 @@ class TemplatesTab(QWidget):
         self._current_card: TemplateCard | None = None
         self._missing_table: QTableWidget | None = None
 
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(1200)
+        self._autosave_timer.timeout.connect(self._autosave_to_excel)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(6)
@@ -243,9 +255,30 @@ class TemplatesTab(QWidget):
         root.addWidget(split, 1)
 
         # Левая часть — дерево шаблонов
+        left_wrap = QWidget(self)
+        left_lay = QVBoxLayout(left_wrap)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(4)
+
+        left_hdr = QHBoxLayout()
+        left_hdr.setContentsMargins(2, 0, 2, 0)
+        left_hdr.setSpacing(4)
+        left_hdr.addWidget(QLabel("Шаблоны"))
+        self.open_templates_dir_btn = QToolButton(self)
+        self.open_templates_dir_btn.setIcon(_make_icon(_SVG_FOLDER, "#5f6e80"))
+        self.open_templates_dir_btn.setIconSize(QSize(16, 16))
+        self.open_templates_dir_btn.setToolTip("Открыть папку шаблонов из настроек")
+        self.open_templates_dir_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.open_templates_dir_btn.setAutoRaise(True)
+        self.open_templates_dir_btn.setFixedSize(20, 20)
+        left_hdr.addWidget(self.open_templates_dir_btn)
+        left_hdr.addStretch(1)
+        left_lay.addLayout(left_hdr)
+
         self.tree = QTreeWidget(self)
-        self.tree.setHeaderLabels(["Шаблоны"])
-        split.addWidget(self.tree)
+        self.tree.setHeaderHidden(True)
+        left_lay.addWidget(self.tree, 1)
+        split.addWidget(left_wrap)
 
         # Правая часть — область карточки с прокруткой
         self.card_scroll = QScrollArea(self)
@@ -267,6 +300,7 @@ class TemplatesTab(QWidget):
         # ── Соединения ────────────────────────────────────────────────
         self.refresh_btn.clicked.connect(self._reload_all)
         self.save_btn.clicked.connect(self._save_to_excel)
+        self.open_templates_dir_btn.clicked.connect(self._open_templates_dir)
         self.tree.currentItemChanged.connect(self._on_tree_item_changed)
         self.project_combo.currentIndexChanged.connect(self._on_project_changed)
 
@@ -470,6 +504,7 @@ class TemplatesTab(QWidget):
             tbl.setFixedHeight(min(row_h * len(missing_fields) + 4, 320))
 
             self._missing_table = tbl
+            tbl.itemChanged.connect(self._schedule_autosave)
             lay.addWidget(tbl)
 
         elif project:
@@ -513,6 +548,57 @@ class TemplatesTab(QWidget):
             if k:
                 result[k] = v
         return result
+
+    def _schedule_autosave(self) -> None:
+        self._autosave_timer.start()
+
+    def _autosave_to_excel(self) -> None:
+        project = self._current_project()
+        if not project or not self._settings.excel_path:
+            return
+        extra = self._collect_missing_values()
+        for k, v in extra.items():
+            if v.strip():
+                project.fields[k] = v.strip()
+        try:
+            from filldoc.excel.excel_store import ExcelProjectStore
+            store = ExcelProjectStore(self._settings.excel_path)
+            store.save_project_fields(project)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Автосохранение", str(e))
+
+    def _open_templates_dir(self) -> None:
+        templates_dir = (self._settings.templates_dir or "").strip()
+        if not templates_dir:
+            QMessageBox.warning(
+                self,
+                "Шаблоны",
+                "Папка шаблонов не указана в настройках.",
+            )
+            return
+
+        path = Path(templates_dir)
+        if not path.exists() or not path.is_dir():
+            QMessageBox.warning(
+                self,
+                "Шаблоны",
+                "Папка шаблонов недоступна или не существует.",
+            )
+            return
+
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(path))  # noqa: S606
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])  # noqa: S603
+            else:
+                subprocess.Popen(["xdg-open", str(path)])  # noqa: S603
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                "Шаблоны",
+                f"Не удалось открыть папку шаблонов: {e}",
+            )
 
     # ── Сохранение ────────────────────────────────────────────────────────────
 
