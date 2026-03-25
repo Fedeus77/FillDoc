@@ -777,6 +777,7 @@ class ProjectsTab(QWidget):
             self._card_title_edit.setMinimumWidth(min(w, 560))
 
         self._card_title_edit.textChanged.connect(lambda _: _sync_title_width())
+        self._card_title_edit.textChanged.connect(self._on_card_title_changed)
         self._card_title_edit.editingFinished.connect(self._schedule_autosave)
 
         title_sep = QFrame()
@@ -1276,7 +1277,10 @@ class ProjectsTab(QWidget):
         return auto or project.project_id
 
     def _refresh_project_name(self, project: Project) -> None:
-        """Пересчитывает 'Имя проекта' из Кредитор и Должник и сохраняет в поля."""
+        """Заполняет 'Имя проекта' из Кредитор и Должник, только если поле ещё не задано вручную."""
+        existing = (project.fields.get(PROJECT_NAME_FIELD) or "").strip()
+        if existing:
+            return
         auto = _auto_project_name(project.fields)
         if auto:
             project.fields[PROJECT_NAME_FIELD] = auto
@@ -1286,6 +1290,19 @@ class ProjectsTab(QWidget):
         if isinstance(project, Project):
             project.fields[PROJECT_NAME_FIELD] = (item.text() or "").strip()
             self._schedule_autosave()
+
+    def _on_card_title_changed(self, text: str) -> None:
+        """Мгновенно обновляет имя проекта и элемент списка при вводе в поле заголовка карточки."""
+        if self._current is None:
+            return
+        self._current.fields[PROJECT_NAME_FIELD] = text.strip()
+        row = self.list.currentRow()
+        item = self.list.item(row)
+        if item is not None:
+            self.list.itemChanged.disconnect(self._on_list_item_edited)
+            item.setText(self._project_display_name(self._current))
+            self.list.itemChanged.connect(self._on_list_item_edited)
+        self._schedule_autosave()
 
     def _on_list_context_menu(self, pos: QPoint) -> None:
         item = self.list.itemAt(pos)
