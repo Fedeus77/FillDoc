@@ -4,16 +4,19 @@ import json
 import os
 import re
 import shutil
+import webbrowser
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QPoint, QByteArray, QEvent, QRect, QSize, QTimer, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QFont, QIcon, QImage, QPixmap, QPainter, QTextOption
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QFont, QIcon, QImage, QKeySequence, QPixmap, QPainter, QShortcut, QTextOption
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -49,20 +52,31 @@ PROJECT_NAME_FIELD = "Имя проекта"
 _DROP_ACTIVE_STYLE = "QTableWidget { border: 2px dashed #4A90D9; border-radius: 4px; }"
 
 _CARD_FIXED_FIELDS = [
-    "Имя проекта",
     "ИНН кредитора",
     "ИНН должника",
     "Номер осн. дела",
-    "Номер листа и дата",
+    "Номер банк. дела",
+    "Номер листа",
+    "Дата листа",
     "Номер ИП",
+    "Дата ИП",
 ]
+
+# Поля карточки, у которых есть отдельное поле для хранения ссылки.
+_CARD_LINK_FIELDS: dict[str, str] = {
+    "ИНН кредитора":   "Ссылка контур кредитор",
+    "ИНН должника":    "Ссылка контур должник",
+    "Номер осн. дела": "Ссылка осн. дело КАД",
+    "Номер банк. дела": "Ссылка банк. Дело КАД",
+    "Номер ИП":        "Ссылка ИП",
+}
 
 _CASE_NUMBER_FIELD_NEW = "Номер осн. дела"
 _CASE_NUMBER_FIELD_OLD = "Номер дела"
 
-_CARD_FIELD_COL_MIN_W = 150
+_CARD_FIELD_COL_MIN_W = 120
 _CARD_FIELD_COL_MAX_W = 360
-_CARD_FIELD_COL_DEFAULT_W = 190
+_CARD_FIELD_COL_DEFAULT_W = 140
 _CARD_VALUE_COL_MIN_W = 220
 _CARD_COL_GAP = 0
 _CARD_COL_STEP = 12
@@ -110,6 +124,14 @@ _SVG_UPLOAD = """
   <polyline points="16 16 12 12 8 16"/>
   <line x1="12" y1="12" x2="12" y2="21"/>
   <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
+</svg>"""
+
+_SVG_LINK = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2.2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <path d="M10 13a5 5 0 0 1 0-7l1-1a5 5 0 0 1 7 7l-1 1"/>
+  <path d="M14 11a5 5 0 0 1 0 7l-1 1a5 5 0 0 1-7-7l1-1"/>
 </svg>"""
 
 # ── Стили ────────────────────────────────────────────────────────────────────
@@ -194,6 +216,25 @@ _CARD_COL_HEADER_CSS = (
     "letter-spacing: 0.5px; padding: 0 0 2px 0;"
 )
 
+_CARD_TITLE_EDIT_STYLE = """
+QLineEdit {
+    background: transparent;
+    border: none;
+    border-bottom: 1.5px solid #dde2ea;
+    border-radius: 0;
+    padding: 2px 2px 4px 2px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #1e2a38;
+}
+QLineEdit:focus {
+    border-bottom: 2px solid #5b9bd5;
+}
+QLineEdit:hover {
+    border-bottom-color: #aabdd0;
+}
+"""
+
 _CARD_DIVIDER_BTN_STYLE = """
 QToolButton {
     background: transparent;
@@ -255,6 +296,25 @@ QToolButton:hover {
 }
 QToolButton:pressed {
     background: #f5d0d0;
+}
+"""
+
+_LINK_BTN_STYLE = """
+QToolButton {
+    background: transparent;
+    border: none;
+    color: #4a7ab5;
+    border-radius: 5px;
+    min-width:  22px;
+    min-height: 22px;
+    max-width:  22px;
+    max-height: 22px;
+}
+QToolButton:hover {
+    background: #e8edf3;
+}
+QToolButton:pressed {
+    background: #d0d8e2;
 }
 """
 
@@ -376,6 +436,18 @@ def _mini_btn(text: str, tooltip: str, style: str = _MINI_BTN_STYLE) -> QToolBut
     btn.setToolTip(tooltip)
     btn.setStyleSheet(style)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    return btn
+
+
+
+def _link_btn() -> QToolButton:
+    btn = QToolButton()
+    btn.setIcon(_make_icon(_SVG_LINK, "#4a7ab5", 14))
+    btn.setIconSize(QSize(14, 14))
+    btn.setToolTip("Открыть ссылку")
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setStyleSheet(_LINK_BTN_STYLE)
+    btn.setVisible(False)
     return btn
 
 
@@ -577,6 +649,11 @@ class ProjectsTab(QWidget):
         self._autosave_timer.setInterval(1500)
         self._autosave_timer.timeout.connect(self._autosave)
 
+        self._requisites_resize_timer = QTimer(self)
+        self._requisites_resize_timer.setSingleShot(True)
+        self._requisites_resize_timer.setInterval(0)
+        self._requisites_resize_timer.timeout.connect(self._update_requisites_layout)
+
         self.setAcceptDrops(True)
 
         root = QVBoxLayout(self)
@@ -625,6 +702,14 @@ class ProjectsTab(QWidget):
         self.table = QTableWidget(self)
         self.table.setColumnCount(2)
         self.table.setHorizontalHeaderLabels(["Поле", "Значение"])
+        self.table.setWordWrap(True)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.table.viewport().installEventFilter(self)
         h0 = self.table.horizontalHeaderItem(0)
         h1 = self.table.horizontalHeaderItem(1)
         if h0:
@@ -669,11 +754,36 @@ class ProjectsTab(QWidget):
         scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: #f4f6f9; }")
 
         content = QWidget()
+        content.setMaximumWidth(600)
         self._card_content_widget = content
         self._card_content_vbox = QVBoxLayout(content)
         self._card_content_vbox.setContentsMargins(12, 8, 12, 8)
         self._card_content_vbox.setSpacing(5)
         self._card_left_col_widgets: list[QWidget] = []
+
+        # ── Поле «Имя проекта» — заголовок карточки ──────────────────────
+        self._card_title_edit = QLineEdit()
+        self._card_title_edit.setPlaceholderText("Имя проекта")
+        self._card_title_edit.setStyleSheet(_CARD_TITLE_EDIT_STYLE)
+        self._card_title_edit.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
+        )
+        self._card_title_edit.setMinimumWidth(120)
+
+        def _sync_title_width() -> None:
+            fm = self._card_title_edit.fontMetrics()
+            txt = self._card_title_edit.text() or self._card_title_edit.placeholderText()
+            w = fm.horizontalAdvance(txt) + 20
+            self._card_title_edit.setMinimumWidth(min(w, 560))
+
+        self._card_title_edit.textChanged.connect(lambda _: _sync_title_width())
+        self._card_title_edit.editingFinished.connect(self._schedule_autosave)
+
+        title_sep = QFrame()
+        title_sep.setFrameShape(QFrame.Shape.HLine)
+        title_sep.setStyleSheet("color: #dde2ea; margin: 4px 0 2px 0;")
+        self._card_content_vbox.addWidget(self._card_title_edit)
+        self._card_content_vbox.addWidget(title_sep)
 
         # Заголовки колонок
         cols_header = QWidget()
@@ -709,8 +819,12 @@ class ProjectsTab(QWidget):
 
         # Фиксированные поля
         self._card_fixed_edits: dict[str, QLineEdit] = {}
+        self._card_link_btns: list[tuple[QToolButton, str]] = []
         for field_name in _CARD_FIXED_FIELDS:
-            fw, edit = self._make_fixed_field_row(field_name)
+            fw, edit = self._make_fixed_field_row(
+                field_name,
+                link_field_name=_CARD_LINK_FIELDS.get(field_name),
+            )
             self._card_fixed_edits[field_name] = edit
             self._card_content_vbox.addWidget(fw)
 
@@ -749,7 +863,16 @@ class ProjectsTab(QWidget):
 
         self._card_content_vbox.addStretch()
 
-        scroll.setWidget(content)
+        # Оборачиваем content в страничный виджет: content + stretch справа.
+        # Это гарантирует, что контент не растягивается на всю ширину окна.
+        page = QWidget()
+        page.setStyleSheet("background: #f4f6f9;")
+        page_hbox = QHBoxLayout(page)
+        page_hbox.setContentsMargins(0, 0, 0, 0)
+        page_hbox.setSpacing(0)
+        page_hbox.addWidget(content)
+        page_hbox.addStretch()
+        scroll.setWidget(page)
         outer.addWidget(scroll)
 
         self._card_custom_rows: list[tuple[QWidget, QLineEdit, _AutoResizeTextEdit]] = []
@@ -761,6 +884,7 @@ class ProjectsTab(QWidget):
         field_name: str,
         *,
         label_text: str | None = None,
+        link_field_name: str | None = None,
     ) -> tuple[QWidget, QLineEdit]:
         row = QWidget()
         row.setStyleSheet("background: transparent;")
@@ -780,6 +904,11 @@ class ProjectsTab(QWidget):
 
         hbox.addWidget(label)
         hbox.addWidget(edit, 1)
+        if link_field_name:
+            lb = _link_btn()
+            hbox.addWidget(lb)
+            self._wire_link_for_fixed_field(edit, lb, link_field_name)
+            self._card_link_btns.append((lb, link_field_name))
         return row, edit
 
     def _make_custom_field_row(
@@ -837,9 +966,50 @@ class ProjectsTab(QWidget):
 
         return row, name_edit, value_edit
 
+    def _wire_link_for_fixed_field(
+        self,
+        edit: QLineEdit,
+        link_btn: QToolButton,
+        link_field_name: str,
+    ) -> None:
+        """Ctrl+K на поле сохраняет URL в отдельное поле link_field_name.
+        Иконка ссылки горит, когда это поле непустое."""
+
+        def open_link() -> None:
+            if not self._current:
+                return
+            url = self._current.fields.get(link_field_name, "").strip()
+            if url:
+                webbrowser.open(url)
+
+        def insert_link() -> None:
+            if not self._current:
+                return
+            existing = self._current.fields.get(link_field_name, "").strip()
+            url_raw, ok = QInputDialog.getText(
+                self, "Гиперссылка", "URL:", QLineEdit.EchoMode.Normal, existing
+            )
+            if not ok:
+                return
+            url = url_raw.strip()
+            self._current.fields[link_field_name] = url
+            link_btn.setVisible(bool(url))
+            link_btn.setProperty("_url", url)
+            self._schedule_autosave()
+
+        link_btn.clicked.connect(open_link)
+
+        sc = QShortcut(QKeySequence("Ctrl+K"), edit)
+        sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        sc.activated.connect(insert_link)
+
     # ── Карточка: рендер и чтение ─────────────────────────────────────────────
 
     def _render_card(self, project: Project) -> None:
+        self._card_title_edit.blockSignals(True)
+        self._card_title_edit.setText(project.fields.get(PROJECT_NAME_FIELD, ""))
+        self._card_title_edit.blockSignals(False)
+
         for field_name, edit in self._card_fixed_edits.items():
             edit.blockSignals(True)
             if field_name == _CASE_NUMBER_FIELD_NEW:
@@ -853,6 +1023,12 @@ class ProjectsTab(QWidget):
             else:
                 edit.setText(project.fields.get(field_name, ""))
             edit.blockSignals(False)
+
+        # Обновляем состояние иконок ссылок для текущего проекта.
+        for link_btn, link_field_name in self._card_link_btns:
+            url = project.fields.get(link_field_name, "").strip()
+            link_btn.setVisible(bool(url))
+            link_btn.setProperty("_url", url)
 
         # Очищаем старые доп. поля
         for row_widget, _, _ in self._card_custom_rows:
@@ -871,6 +1047,8 @@ class ProjectsTab(QWidget):
             self._card_extras_vbox.addWidget(rw)
 
     def _read_card_into_project(self, project: Project) -> None:
+        project.fields[PROJECT_NAME_FIELD] = self._card_title_edit.text().strip()
+
         for field_name, edit in self._card_fixed_edits.items():
             val = edit.text().strip()
             if field_name == _CASE_NUMBER_FIELD_NEW:
@@ -899,10 +1077,15 @@ class ProjectsTab(QWidget):
             self.list.itemChanged.connect(self._on_list_item_edited)
 
     def _clear_card_display(self) -> None:
+        self._card_title_edit.blockSignals(True)
+        self._card_title_edit.setText("")
+        self._card_title_edit.blockSignals(False)
         for edit in self._card_fixed_edits.values():
             edit.blockSignals(True)
             edit.setText("")
             edit.blockSignals(False)
+        for link_btn, _ in self._card_link_btns:
+            link_btn.setVisible(False)
         for row_widget, _, _ in self._card_custom_rows:
             self._card_extras_vbox.removeWidget(row_widget)
             left_col_widget = row_widget.property("_left_col_widget")
@@ -995,6 +1178,9 @@ class ProjectsTab(QWidget):
             and event.type() == QEvent.Type.Resize
         ):
             self._scale_preview()
+        if obj is self.table.viewport() and event.type() == QEvent.Type.Resize:
+            # При изменении ширины — пересчитать высоты строк для переноса текста.
+            self._requisites_resize_timer.start()
         return super().eventFilter(obj, event)
 
     # ── Синхронизация вкладок ─────────────────────────────────────────────────
@@ -1332,7 +1518,15 @@ class ProjectsTab(QWidget):
                 value_item.setBackground(QColor("#ffd6e7"))
             self.table.setItem(i, 1, value_item)
         self.table.blockSignals(False)
-        self.table.resizeColumnsToContents()
+        self.table.resizeColumnToContents(0)
+        self._update_requisites_layout()
+
+    def _update_requisites_layout(self) -> None:
+        # Важное: высота строк зависит от ширины колонки "Значение".
+        try:
+            self.table.resizeRowsToContents()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _read_table_into_project(self, project: Project) -> None:
         fields: dict[str, str] = {}

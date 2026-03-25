@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QByteArray, QSize, QTimer
 from PySide6.QtGui import QIcon, QPixmap, QPainter
 from PySide6.QtSvg import QSvgRenderer
@@ -45,6 +50,16 @@ _SVG_CHECK = """
   <polyline points="20 6 9 17 4 12"/>
 </svg>"""
 
+_SVG_EXCEL = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+  <path d="M14 2v6h6"/>
+  <path d="M8 12l4 6"/>
+  <path d="M12 12l-4 6"/>
+</svg>"""
+
 # ── Стили ────────────────────────────────────────────────────────────────────
 
 _REFRESH_BTN_STYLE = """
@@ -78,6 +93,24 @@ QToolButton:hover {
 QToolButton:pressed {
     background-color: #d0daea;
 }
+"""
+
+_BOTTOM_ICON_BTN_STYLE = """
+QToolButton {{
+    background-color: transparent;
+    border: none;
+    border-radius: 9px;
+    min-width:  34px;
+    min-height: 34px;
+    max-width:  34px;
+    max-height: 34px;
+}}
+QToolButton:hover {{
+    background-color: #e8edf5;
+}}
+QToolButton:pressed {{
+    background-color: #d0daea;
+}}
 """
 
 _VAR_ROW_STYLE = """
@@ -143,6 +176,16 @@ def _refresh_btn() -> QToolButton:
     return btn
 
 
+def _open_excel_btn() -> QToolButton:
+    btn = QToolButton()
+    btn.setIcon(_make_icon(_SVG_EXCEL, "#2d8a4e", 18))
+    btn.setIconSize(QSize(18, 18))
+    btn.setToolTip("Открыть Excel-файл из настроек")
+    btn.setStyleSheet(_BOTTOM_ICON_BTN_STYLE)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    return btn
+
+
 # ── Основной класс ────────────────────────────────────────────────────────────
 
 class VariablesTab(QWidget):
@@ -163,6 +206,9 @@ class VariablesTab(QWidget):
         desc = QLabel("Переменные из таблицы Excel — используйте в шаблонах:")
         desc.setStyleSheet(_DESC_STYLE)
         top.addWidget(desc, 1)
+
+        self.open_excel_btn = _open_excel_btn()
+        top.addWidget(self.open_excel_btn)
 
         self.refresh_btn = _refresh_btn()
         top.addWidget(self.refresh_btn)
@@ -192,6 +238,7 @@ class VariablesTab(QWidget):
         self._show_empty("Нажмите  ↻  для загрузки переменных из Excel")
 
         self.refresh_btn.clicked.connect(self._reload)
+        self.open_excel_btn.clicked.connect(self._open_excel_file)
 
     # ── Настройки ─────────────────────────────────────────────────────────────
 
@@ -219,6 +266,35 @@ class VariablesTab(QWidget):
             return
 
         self._render_list()
+
+    def _open_excel_file(self) -> None:
+        excel_path = (self._settings.excel_path or "").strip()
+        if not excel_path:
+            QMessageBox.warning(
+                self,
+                "Переменные",
+                "Не указан путь к Excel-файлу (см. Настройки).",
+            )
+            return
+
+        path = Path(excel_path)
+        if not path.exists() or not path.is_file():
+            QMessageBox.warning(
+                self,
+                "Переменные",
+                "Excel-файл недоступен или не существует.",
+            )
+            return
+
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(path))  # noqa: S606
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])  # noqa: S603
+            else:
+                subprocess.Popen(["xdg-open", str(path)])  # noqa: S603
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Переменные", f"Не удалось открыть Excel-файл:\n{e}")
 
     # ── Рендер списка ─────────────────────────────────────────────────────────
 

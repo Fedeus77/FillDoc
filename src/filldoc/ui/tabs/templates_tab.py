@@ -488,6 +488,8 @@ class TemplatesTab(QWidget):
                 1, QHeaderView.ResizeMode.Stretch
             )
             tbl.verticalHeader().setVisible(False)
+            tbl.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.AllEditTriggers)
             tbl.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             tbl.setStyleSheet(_TABLE_STYLE)
@@ -501,7 +503,11 @@ class TemplatesTab(QWidget):
                 tbl.setItem(i, 1, QTableWidgetItem(""))
 
             row_h = 26
-            tbl.setFixedHeight(min(row_h * len(missing_fields) + 4, 320))
+            tbl.verticalHeader().setDefaultSectionSize(row_h)
+            tbl.resizeRowsToContents()
+            total_h = sum(tbl.rowHeight(r) for r in range(tbl.rowCount()))
+            total_h += 6  # небольшие отступы/рамка
+            tbl.setFixedHeight(total_h)
 
             self._missing_table = tbl
             tbl.itemChanged.connect(self._schedule_autosave)
