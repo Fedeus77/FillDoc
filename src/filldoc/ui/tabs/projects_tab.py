@@ -375,31 +375,76 @@ def _auto_project_name(fields: dict[str, str]) -> str:
 
 _PROJECT_LIST_STYLE = """
 QListWidget {
-    background-color: #ffffff;
-    border: 1px solid #dde2ea;
-    border-radius: 8px;
+    background-color: #fbfcfe;
+    border: 1px solid #d8e0ea;
+    border-radius: 12px;
     outline: 0;
-    padding: 4px 4px;
+    padding: 8px 7px;
 }
 QListWidget::item {
     border: none;
     background: transparent;
     padding: 0;
-    margin: 0;
+    margin: 0 0 4px 0;
 }
 QScrollBar:vertical {
-    background: #f4f6f9;
+    background: #eef2f7;
     width: 6px;
     border-radius: 3px;
-    margin: 4px 2px 4px 2px;
+    margin: 6px 2px 6px 2px;
 }
 QScrollBar::handle:vertical {
-    background: #c0cad6;
+    background: #bcc7d4;
     border-radius: 3px;
     min-height: 24px;
 }
 QScrollBar::handle:vertical:hover {
-    background: #8A9BB0;
+    background: #8a9bb0;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical { height: 0px; }
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical { background: none; }
+"""
+
+_REQUISITES_TABLE_STYLE = """
+QTableWidget {
+    background-color: #ffffff;
+    alternate-background-color: #f7faff;
+    border: 1px solid #dbe3ec;
+    border-radius: 10px;
+    gridline-color: #e7edf4;
+    outline: 0;
+    color: #1e2a38;
+    selection-background-color: #deebff;
+    selection-color: #18345b;
+}
+QTableWidget::item {
+    padding: 6px 8px;
+    border: none;
+}
+QHeaderView::section {
+    background-color: #eef3f8;
+    color: #5b6a7a;
+    border: none;
+    border-bottom: 1px solid #dbe3ec;
+    padding: 7px 8px;
+    font-size: 11px;
+    font-weight: 600;
+}
+QScrollBar:vertical {
+    background: #eef2f7;
+    width: 6px;
+    border-radius: 3px;
+    margin: 6px 2px;
+}
+QScrollBar::handle:vertical {
+    background: #bcc7d4;
+    border-radius: 3px;
+    min-height: 24px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #8a9bb0;
 }
 QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical { height: 0px; }
@@ -456,9 +501,9 @@ def _link_btn() -> QToolButton:
 class _ProjectItemDelegate(QStyledItemDelegate):
     """Рисует каждый элемент списка проектов как современную карточку."""
 
-    _H = 28          # высота строки
-    _RADIUS = 5      # скругление фона
-    _ACCENT_W = 3    # ширина левой цветной полосы при выборе
+    _H = 40          # высота строки
+    _RADIUS = 10     # скругление фона
+    _ACCENT_W = 4    # ширина левой цветной полосы при выборе
 
     def paint(self, painter: QPainter, option, index) -> None:  # noqa: ANN001
         painter.save()
@@ -471,45 +516,52 @@ class _ProjectItemDelegate(QStyledItemDelegate):
         bg_role = index.data(Qt.ItemDataRole.BackgroundRole)
         is_archived = bg_role is not None and isinstance(bg_role, QColor)
 
-        rect = option.rect.adjusted(2, 2, -2, -2)
+        rect = option.rect.adjusted(2, 2, -2, -4)
 
         # ── Фон ──────────────────────────────────────────────────────
         if is_selected:
-            bg = QColor("#deeaff")
+            bg = QColor("#e5efff")
+            border = QColor("#b7cbec")
         elif is_hovered:
-            bg = QColor("#f0f5fb")
+            bg = QColor("#f3f7fc")
+            border = QColor("#d4deea")
         elif is_archived:
-            bg = QColor("#f5f5f5")
+            bg = QColor("#f4f4f5")
+            border = QColor("#e1e1e3")
         else:
             bg = QColor("#ffffff")
+            border = QColor("#e3e9f1")
 
-        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setPen(border)
         painter.setBrush(bg)
         painter.drawRoundedRect(rect, self._RADIUS, self._RADIUS)
 
         # ── Левая акцентная полоса (выбранный элемент) ────────────────
         if is_selected:
-            accent = QRect(rect.left() + 1, rect.top() + 5,
-                           self._ACCENT_W, rect.height() - 10)
-            painter.setBrush(QColor("#4A90D9"))
-            painter.drawRoundedRect(accent, 1, 1)
+            accent = QRect(rect.left() + 3, rect.top() + 7,
+                           self._ACCENT_W, rect.height() - 14)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#4a90d9"))
+            painter.drawRoundedRect(accent, 2, 2)
 
         # ── Текст ──────────────────────────────────────────────────────
         if is_selected:
-            text_color = QColor("#1a3a6b")
+            text_color = QColor("#18345b")
         elif is_archived:
-            text_color = QColor("#8a8a8a")
+            text_color = QColor("#858b94")
         else:
             text_color = QColor("#1e2a38")
 
         font = QFont(option.font)
-        font.setPointSizeF(9.0)
-        font.setWeight(QFont.Weight.DemiBold if is_selected else QFont.Weight.Normal)
+        font.setFamily("Bahnschrift")
+        font.setPointSizeF(10.2)
+        font.setWeight(QFont.Weight.DemiBold if is_selected else QFont.Weight.Medium)
+        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 102.0)
         painter.setFont(font)
         painter.setPen(text_color)
 
         text = index.data(Qt.ItemDataRole.DisplayRole) or ""
-        text_rect = rect.adjusted(14, 0, -8, 0)
+        text_rect = rect.adjusted(18, 0, -12, 0)
         painter.drawText(
             text_rect,
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
@@ -521,6 +573,45 @@ class _ProjectItemDelegate(QStyledItemDelegate):
     def sizeHint(self, option, index) -> QSize:  # noqa: ANN001
         w = option.rect.width() if option.rect.width() > 0 else 200
         return QSize(w, self._H)
+
+
+class _ProjectListWidget(QListWidget):
+    """Список проектов с reorder и дропом JSON на конкретную строку."""
+
+    json_dropped = Signal(str, int)
+
+    @staticmethod
+    def _json_paths(event) -> list[str]:  # noqa: ANN001
+        if not event.mimeData().hasUrls():
+            return []
+        paths: list[str] = []
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if path.lower().endswith(".json"):
+                paths.append(path)
+        return paths
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if self._json_paths(event):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # noqa: ANN001
+        if self._json_paths(event):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        json_paths = self._json_paths(event)
+        if json_paths:
+            item = self.itemAt(event.position().toPoint())
+            row = self.row(item) if item is not None else -1
+            self.json_dropped.emit(json_paths[0], row)
+            event.acceptProposedAction()
+            return
+        super().dropEvent(event)
 
 
 # ── Зона перетаскивания файлов ────────────────────────────────────────────────
@@ -682,7 +773,7 @@ class ProjectsTab(QWidget):
         splitter.setChildrenCollapsible(False)
         root.addWidget(splitter, 1)
 
-        self.list = QListWidget(self)
+        self.list = _ProjectListWidget(self)
         self.list.setMinimumWidth(180)
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.list.setDragEnabled(True)
@@ -692,7 +783,7 @@ class ProjectsTab(QWidget):
         self.list.setMouseTracking(True)
         self.list.setStyleSheet(_PROJECT_LIST_STYLE)
         self.list.setItemDelegate(_ProjectItemDelegate(self.list))
-        self.list.setSpacing(1)
+        self.list.setSpacing(4)
         splitter.addWidget(self.list)
 
         # ── Вкладки ────────────────────────────────────────────────────────
@@ -702,9 +793,12 @@ class ProjectsTab(QWidget):
         self.table = QTableWidget(self)
         self.table.setColumnCount(2)
         self.table.setHorizontalHeaderLabels(["Поле", "Значение"])
+        self.table.setAlternatingRowColors(True)
         self.table.setWordWrap(True)
         self.table.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.setStyleSheet(_REQUISITES_TABLE_STYLE)
+        self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -738,6 +832,7 @@ class ProjectsTab(QWidget):
         self.list.customContextMenuRequested.connect(self._on_list_context_menu)
         self.list.currentRowChanged.connect(self._select_project)
         self.list.itemChanged.connect(self._on_list_item_edited)
+        self.list.json_dropped.connect(self._on_project_list_json_dropped)
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.table.itemChanged.connect(self._schedule_autosave)
 
@@ -1073,9 +1168,7 @@ class ProjectsTab(QWidget):
         row = self.list.currentRow()
         item = self.list.item(row)
         if item is not None:
-            self.list.itemChanged.disconnect(self._on_list_item_edited)
-            item.setText(self._project_display_name(project))
-            self.list.itemChanged.connect(self._on_list_item_edited)
+            self._refresh_list_item_text(project)
 
     def _clear_card_display(self) -> None:
         self._card_title_edit.blockSignals(True)
@@ -1237,26 +1330,119 @@ class ProjectsTab(QWidget):
                 return
         event.ignore()
 
-    def _load_from_json(self, path: str) -> None:
+    def _read_json_fields(self, path: str) -> dict[str, str] | None:
         try:
             with open(path, encoding="utf-8") as f:
                 data: dict = json.load(f)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "JSON", f"Не удалось прочитать файл:\n{e}")
-            return
+            return None
 
         if not isinstance(data, dict):
             QMessageBox.warning(self, "JSON", "Файл должен содержать JSON-объект (словарь полей).")
+            return None
+
+        return {str(k): "" if v is None else str(v) for k, v in data.items()}
+
+    def _load_from_json(self, path: str) -> None:
+        fields = self._read_json_fields(path)
+        if fields is None:
             return
 
-        case_number = str(data.get("№ дела", "") or data.get("Номер дела", "")).strip()
+        case_number = str(fields.get("№ дела", "") or fields.get("Номер дела", "")).strip()
         project_id = case_number or Path(path).stem
-        fields = {str(k): str(v) for k, v in data.items()}
         project = Project(project_id=project_id, fields=fields, headers=list(fields.keys()))
 
         self._projects.append(project)
         self._add_project_to_list(project)
         self.list.setCurrentRow(len(self._projects) - 1)
+
+    def _on_project_list_json_dropped(self, path: str, row: int) -> None:
+        if row < 0 or row >= self.list.count():
+            self._load_from_json(path)
+            return
+
+        item = self.list.item(row)
+        if item is None:
+            self._load_from_json(path)
+            return
+
+        project = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(project, Project):
+            self._load_from_json(path)
+            return
+
+        self.list.setCurrentRow(row)
+        self._merge_project_from_json(project, path)
+
+    def _merge_project_from_json(self, project: Project, path: str) -> None:
+        fields = self._read_json_fields(path)
+        if fields is None:
+            return
+
+        if project is self._current:
+            self._sync_current_to_project()
+
+        added_count = 0
+        replaced_count = 0
+        kept_count = 0
+
+        for key, new_value_raw in fields.items():
+            new_value = new_value_raw.strip()
+            old_value = str(project.fields.get(key, "") or "").strip()
+
+            if key not in project.fields or old_value == "":
+                project.fields[key] = new_value_raw
+                added_count += 1
+                continue
+
+            if new_value == "" or old_value == new_value:
+                kept_count += 1
+                continue
+
+            answer = QMessageBox.question(
+                self,
+                "Конфликт значения",
+                (
+                    f"В проекте уже есть значение для поля:\n\n"
+                    f"{key}\n\n"
+                    f"Текущее значение:\n{old_value}\n\n"
+                    f"Новое значение из JSON:\n{new_value}\n\n"
+                    f"Заменить текущее значение новым?"
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                project.fields[key] = new_value_raw
+                replaced_count += 1
+            else:
+                kept_count += 1
+
+        headers = list(project.headers or [])
+        for key in fields:
+            if key and key not in headers:
+                headers.append(key)
+        if headers:
+            project.headers = headers
+
+        self._refresh_project_name(project)
+        self._refresh_list_item_text(project)
+        if project is self._current:
+            self._render_card(project)
+            self._render_project(project)
+
+        self._schedule_autosave()
+        QMessageBox.information(
+            self,
+            "JSON",
+            (
+                f"Дозаполнение проекта завершено.\n\n"
+                f"Добавлено полей: {added_count}\n"
+                f"Заменено полей: {replaced_count}\n"
+                f"Оставлено без изменений: {kept_count}"
+            ),
+        )
 
     # ── Список проектов ───────────────────────────────────────────────────────
 
@@ -1285,6 +1471,16 @@ class ProjectsTab(QWidget):
         if auto:
             project.fields[PROJECT_NAME_FIELD] = auto
 
+    def _refresh_list_item_text(self, project: Project) -> None:
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            if item is None or item.data(Qt.ItemDataRole.UserRole) is not project:
+                continue
+            self.list.itemChanged.disconnect(self._on_list_item_edited)
+            item.setText(self._project_display_name(project))
+            self.list.itemChanged.connect(self._on_list_item_edited)
+            break
+
     def _on_list_item_edited(self, item: QListWidgetItem) -> None:
         project = item.data(Qt.ItemDataRole.UserRole)
         if isinstance(project, Project):
@@ -1296,12 +1492,7 @@ class ProjectsTab(QWidget):
         if self._current is None:
             return
         self._current.fields[PROJECT_NAME_FIELD] = text.strip()
-        row = self.list.currentRow()
-        item = self.list.item(row)
-        if item is not None:
-            self.list.itemChanged.disconnect(self._on_list_item_edited)
-            item.setText(self._project_display_name(self._current))
-            self.list.itemChanged.connect(self._on_list_item_edited)
+        self._refresh_list_item_text(self._current)
         self._schedule_autosave()
 
     def _on_list_context_menu(self, pos: QPoint) -> None:
