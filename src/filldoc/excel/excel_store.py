@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import shutil
 from pathlib import Path
 
@@ -8,6 +9,8 @@ from openpyxl import load_workbook
 
 from filldoc.core.errors import ExcelError
 from .models import Project
+
+log = logging.getLogger("filldoc.excel")
 
 
 class ExcelProjectStore:
@@ -114,6 +117,9 @@ class ExcelProjectStore:
 
     # ------------------------------------------------------------------ создание бэкапа
 
+    _BACKUP_MAX_COUNT: int = 20
+    _BACKUP_MAX_DAYS: int = 15
+
     def create_backup(self) -> Path:
         src = Path(self.excel_path)
         if not src.exists():
@@ -124,7 +130,6 @@ class ExcelProjectStore:
         dst = backup_dir / f"{src.stem}__backup__{ts}{src.suffix}"
         try:
             shutil.copy2(src, dst)
-            return dst
         except PermissionError as e:
             raise ExcelError(
                 "Нет доступа к Excel-файлу. Закройте Excel (если файл открыт), "
@@ -132,6 +137,45 @@ class ExcelProjectStore:
             ) from e
         except Exception as e:  # noqa: BLE001
             raise ExcelError(f"Не удалось создать резервную копию Excel-файла: {e}") from e
+
+        log.debug("Backup created: %s", dst)
+        self._rotate_backups(backup_dir, src.stem, src.suffix)
+        return dst
+
+    def _rotate_backups(self, backup_dir: Path, stem: str, suffix: str) -> None:
+        """Удаляет бэкапы старше _BACKUP_MAX_DAYS дней и сверх _BACKUP_MAX_COUNT штук."""
+        pattern = f"{stem}__backup__*{suffix}"
+        backups = sorted(backup_dir.glob(pattern), key=lambda p: p.stat().st_mtime)
+
+        cutoff = dt.datetime.now() - dt.timedelta(days=self._BACKUP_MAX_DAYS)
+        to_delete: list[Path] = []
+
+        for bp in backups:
+            try:
+                mtime = dt.datetime.fromtimestamp(bp.stat().st_mtime)
+                if mtime < cutoff:
+                    to_delete.append(bp)
+            except OSError:
+                pass
+
+        # Удаляем по возрасту
+        for bp in to_delete:
+            try:
+                bp.unlink()
+            except OSError:
+                pass
+
+        # После удаления устаревших — оставляем не более _BACKUP_MAX_COUNT
+        remaining = sorted(
+            (p for p in backup_dir.glob(pattern) if p not in to_delete),
+            key=lambda p: p.stat().st_mtime,
+        )
+        excess = len(remaining) - self._BACKUP_MAX_COUNT
+        for bp in remaining[:max(excess, 0)]:
+            try:
+                bp.unlink()
+            except OSError:
+                pass
 
     # ------------------------------------------------------------------ сохранение / добавление
 
@@ -338,13 +382,6 @@ class ExcelProjectStore:
         if not path.exists():
             raise ExcelError("Excel-файл недоступен или не существует.")
 
-        case_number = self._extract_case_number(project.fields)
-        if not case_number and project.row_index is None:
-            raise ExcelError(
-                "Невозможно восстановить проект: не найдено поле с номером дела "
-                "и не задан номер строки в Excel."
-            )
-
         self.create_backup()
 
         try:
@@ -360,12 +397,12 @@ class ExcelProjectStore:
                 else wb.worksheets[0]
             )
 
-            row_idx = self._find_row_by_case_number(ws_archive, case_number) if case_number else None
+            row_idx = self._resolve_archive_row(ws_archive, project)
             if row_idx is None:
-                row_idx = project.row_index
-            archive_max = ws_archive.max_row or 0
-            if row_idx is None or row_idx < 2 or row_idx > archive_max:
-                raise ExcelError("Не удалось определить строку проекта в архиве для восстановления.")
+                raise ExcelError(
+                    "Не удалось найти строку проекта в архиве.\n"
+                    "Возможно, файл был изменён внешней программой."
+                )
 
             row_values = [cell.value for cell in ws_archive[row_idx]]
             ws_current.append(row_values)
@@ -411,6 +448,43 @@ class ExcelProjectStore:
             raise
         except Exception as e:  # noqa: BLE001
             raise ExcelError(f"Не удалось удалить проект из Excel: {e}") from e
+
+    def delete_project_from_archive(
+        self,
+        project: Project,
+        archive_sheet_name: str = "Архив",
+    ) -> None:
+        """Удаляет строку проекта из листа архива Excel."""
+        path = Path(self.excel_path)
+        if not path.exists():
+            raise ExcelError("Excel-файл недоступен или не существует.")
+
+        self.create_backup()
+
+        try:
+            wb = load_workbook(filename=path, read_only=False, data_only=False)
+            ws_archive = self._find_sheet(wb, archive_sheet_name)
+            if ws_archive is None:
+                raise ExcelError("Лист архива в Excel не найден.")
+
+            row_idx = self._resolve_archive_row(ws_archive, project)
+            if row_idx is None:
+                raise ExcelError(
+                    "Не удалось найти строку проекта в архиве.\n"
+                    "Возможно, файл был изменён внешней программой."
+                )
+
+            ws_archive.delete_rows(row_idx, 1)
+            wb.save(path)
+        except PermissionError as e:
+            raise ExcelError(
+                "Не удалось удалить проект из архива: Excel-файл занят или недоступен для записи. "
+                "Закройте Excel (если файл открыт) и попробуйте снова."
+            ) from e
+        except ExcelError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise ExcelError(f"Не удалось удалить проект из архива: {e}") from e
 
     # ------------------------------------------------------------------ приватные вспомогательные
 
@@ -478,13 +552,67 @@ class ExcelProjectStore:
         for col_idx, header_val in enumerate(headers, start=1):
             ws.cell(row=1, column=col_idx).value = header_val
 
+    # Значения-заглушки, которые не считаются настоящим номером дела.
+    _PLACEHOLDER_VALUES: frozenset[str] = frozenset({"—", "-", "–", "−", "n/a", "нет", "."})
+
     def _extract_case_number(self, fields: dict[str, str]) -> str:
-        """Возвращает номер дела из словаря полей по любому из допустимых названий колонки."""
+        """Возвращает номер дела из словаря полей по любому из допустимых названий колонки.
+        Значения-заглушки (тире и т. п.) пропускаются."""
         for key in self._CASE_NUMBER_HEADERS:
             v = fields.get(key)
-            if v is not None and str(v).strip():
-                return str(v).strip()
+            if v is not None:
+                v_str = str(v).strip()
+                if v_str and v_str not in self._PLACEHOLDER_VALUES:
+                    return v_str
         return ""
+
+    def _resolve_archive_row(self, ws_archive, project: Project) -> int | None:  # noqa: ANN001
+        """Определяет номер строки проекта в листе архива.
+
+        Стратегии (в порядке приоритета):
+        1. Поиск по номеру дела (если задан и не заглушка).
+        2. Использование project.row_index, если он валиден.
+        3. Полный перебор строк — выбирается та, у которой больше всего
+           совпадающих с project.fields значений ячеек.
+        """
+        archive_max = ws_archive.max_row or 0
+        if archive_max < 2:
+            return None
+
+        # 1. По номеру дела
+        case_number = self._extract_case_number(project.fields)
+        if case_number:
+            found = self._find_row_by_case_number(ws_archive, case_number)
+            if found is not None and 2 <= found <= archive_max:
+                return found
+
+        # 2. По row_index
+        if project.row_index is not None and 2 <= project.row_index <= archive_max:
+            return project.row_index
+
+        # 3. Перебор строк по максимальному совпадению полей
+        headers = [
+            str(c.value).strip() if c.value is not None else ""
+            for c in ws_archive[1]
+        ]
+        best_row: int | None = None
+        best_score = 0
+        for r in range(2, archive_max + 1):
+            score = 0
+            for col_idx, header in enumerate(headers, start=1):
+                if not header:
+                    continue
+                field_val = str(project.fields.get(header, "") or "").strip()
+                if not field_val or field_val in self._PLACEHOLDER_VALUES:
+                    continue
+                cell_val = ws_archive.cell(row=r, column=col_idx).value
+                cell_str = str(cell_val).strip() if cell_val is not None else ""
+                if cell_str == field_val:
+                    score += 1
+            if score > best_score:
+                best_score = score
+                best_row = r
+        return best_row if best_score >= 1 else None
 
     def _find_row_by_case_number(self, ws, case_number: str) -> int | None:  # noqa: ANN001
         """Возвращает 1-based номер строки, где в колонке с номером дела стоит case_number."""

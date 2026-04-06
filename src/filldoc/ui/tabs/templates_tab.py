@@ -5,9 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QByteArray, QSize, QTimer
-from PySide6.QtGui import QIcon, QPixmap, QPainter
-from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -37,33 +36,12 @@ from filldoc.generator.docx_generator import generate_docx_from_template
 from filldoc.templates.models import TemplateCard
 from filldoc.templates.scanner import TemplateLibrary
 from filldoc.variables.dictionary import default_dictionary
+from filldoc.ui.icons import make_icon, icon_btn, SVG_REFRESH, SVG_SAVE, SVG_FOLDER
 
-# ── SVG иконки ───────────────────────────────────────────────────────────────
-
-_SVG_REFRESH = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2.2"
-     stroke-linecap="round" stroke-linejoin="round">
-  <path d="M1 4v6h6"/>
-  <path d="M23 20v-6h-6"/>
-  <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/>
-</svg>"""
-
-_SVG_SAVE = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2.2"
-     stroke-linecap="round" stroke-linejoin="round">
-  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-  <polyline points="17 21 17 13 7 13 7 21"/>
-  <polyline points="7 3 7 8 15 8"/>
-</svg>"""
-
-_SVG_FOLDER = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2.0"
-     stroke-linecap="round" stroke-linejoin="round">
-  <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-</svg>"""
+# Локальные псевдонимы для обратной совместимости с кодом ниже
+_SVG_REFRESH = SVG_REFRESH
+_SVG_SAVE    = SVG_SAVE
+_SVG_FOLDER  = SVG_FOLDER
 
 # ── Стили ────────────────────────────────────────────────────────────────────
 
@@ -163,16 +141,31 @@ QHeaderView::section {
 
 # ── Вспомогательные функции ───────────────────────────────────────────────────
 
-def _make_icon(svg_src: str, color: str = "#ffffff", size: int = 18) -> QIcon:
-    colored = svg_src.replace("currentColor", color)
-    data = QByteArray(colored.encode())
-    renderer = QSvgRenderer(data)
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    renderer.render(painter)
-    painter.end()
-    return QIcon(pixmap)
+def _apply_output_name_rule(rule: str, filename_stem: str, fields: dict[str, str]) -> str:
+    """
+    Применяет правило нейминга к имени выходного файла.
+
+    Поддерживаемые токены:
+    - {%filename%}  — имя файла шаблона без расширения
+    - {ИмяПоля}     — значение поля из карточки проекта (case-sensitive)
+
+    Пустые значения полей заменяются на пустую строку; несколько подряд
+    идущих разделителей " - " схлопываются в один.
+    """
+    import re as _re
+
+    result = rule.replace("{%filename%}", filename_stem)
+
+    def _replace_field(m: _re.Match) -> str:
+        key = m.group(1)
+        return (fields.get(key) or "").strip()
+
+    result = _re.sub(r"\{([^{}]+)\}", _replace_field, result)
+
+    # Убираем лишние разделители, возникшие из-за пустых полей
+    result = _re.sub(r"(\s*-\s*){2,}", " - ", result)
+    result = _re.sub(r"^\s*-\s*|\s*-\s*$", "", result)
+    return result.strip() or filename_stem
 
 
 def _icon_btn(
@@ -183,13 +176,7 @@ def _icon_btn(
     hover: str,
     pressed: str,
 ) -> QToolButton:
-    btn = QToolButton()
-    btn.setIcon(_make_icon(svg, icon_color))
-    btn.setIconSize(QSize(18, 18))
-    btn.setToolTip(tooltip)
-    btn.setStyleSheet(_BTN_STYLE.format(bg=bg, hover=hover, pressed=pressed))
-    btn.setCursor(Qt.CursorShape.PointingHandCursor)
-    return btn
+    return icon_btn(svg, tooltip, icon_color=icon_color, bg=bg, hover=hover, pressed=pressed)
 
 
 def _h_separator() -> QFrame:
@@ -265,7 +252,7 @@ class TemplatesTab(QWidget):
         left_hdr.setSpacing(4)
         left_hdr.addWidget(QLabel("Шаблоны"))
         self.open_templates_dir_btn = QToolButton(self)
-        self.open_templates_dir_btn.setIcon(_make_icon(_SVG_FOLDER, "#5f6e80"))
+        self.open_templates_dir_btn.setIcon(make_icon(SVG_FOLDER, "#5f6e80"))
         self.open_templates_dir_btn.setIconSize(QSize(16, 16))
         self.open_templates_dir_btn.setToolTip("Открыть папку шаблонов из настроек")
         self.open_templates_dir_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -303,6 +290,13 @@ class TemplatesTab(QWidget):
         self.open_templates_dir_btn.clicked.connect(self._open_templates_dir)
         self.tree.currentItemChanged.connect(self._on_tree_item_changed)
         self.project_combo.currentIndexChanged.connect(self._on_project_changed)
+
+    # ── Статус-бар ────────────────────────────────────────────────────────────
+
+    def _show_status(self, message: str, timeout_ms: int = 4000) -> None:
+        mw = self.window()
+        if hasattr(mw, "show_status"):
+            mw.show_status(message, timeout_ms)
 
     # ── Настройки ─────────────────────────────────────────────────────────────
 
@@ -570,6 +564,7 @@ class TemplatesTab(QWidget):
             from filldoc.excel.excel_store import ExcelProjectStore
             store = ExcelProjectStore(self._settings.excel_path)
             store.save_project_fields(project)
+            self._show_status("Сохранено в Excel")
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Автосохранение", str(e))
 
@@ -635,7 +630,7 @@ class TemplatesTab(QWidget):
         if self._current_card:
             self._build_card(self._current_card)
 
-        QMessageBox.information(self, "Сохранение", "Изменения сохранены в Excel.")
+        self._show_status("Изменения сохранены в Excel")
 
     # ── Заполнение шаблона ────────────────────────────────────────────────────
 
@@ -677,14 +672,7 @@ class TemplatesTab(QWidget):
             else:
                 mapping[raw] = str(project.fields.get(raw, ""))
 
-        customer = (project.fields.get("Заказчик") or "").strip()
-        debtor = (project.fields.get("Должник") or "").strip()
-        parts = [card.name]
-        if customer:
-            parts.append(customer)
-        if debtor:
-            parts.append(debtor)
-        out_name = " - ".join(parts)
+        out_name = _apply_output_name_rule(card.output_name_rule, card.name, project.fields)
 
         try:
             out_path = generate_docx_from_template(
@@ -694,15 +682,32 @@ class TemplatesTab(QWidget):
             QMessageBox.critical(self, "Генерация", str(e))
             return
 
-        out_folder = str(Path(out_path).parent)
+        self._show_status(f"Файл создан: {Path(out_path).name}")
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Готово")
+        msg.setText(f"Файл создан:\n{out_path}")
+        open_file_btn = msg.addButton("Открыть файл", QMessageBox.ButtonRole.AcceptRole)
+        open_folder_btn = msg.addButton("Открыть папку", QMessageBox.ButtonRole.ActionRole)
+        msg.addButton("Закрыть", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+
+        clicked = msg.clickedButton()
         try:
-            if sys.platform == "win32":
-                os.startfile(out_folder)  # noqa: S606
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", out_folder])  # noqa: S603
-            else:
-                subprocess.Popen(["xdg-open", out_folder])  # noqa: S603
+            if clicked is open_file_btn:
+                if sys.platform == "win32":
+                    os.startfile(out_path)  # noqa: S606
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["open", out_path])  # noqa: S603
+                else:
+                    subprocess.Popen(["xdg-open", out_path])  # noqa: S603
+            elif clicked is open_folder_btn:
+                out_folder = str(Path(out_path).parent)
+                if sys.platform == "win32":
+                    os.startfile(out_folder)  # noqa: S606
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["open", out_folder])  # noqa: S603
+                else:
+                    subprocess.Popen(["xdg-open", out_folder])  # noqa: S603
         except Exception:  # noqa: BLE001
             pass
-
-        QMessageBox.information(self, "Готово", f"Файл создан:\n{out_path}")

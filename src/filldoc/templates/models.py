@@ -10,6 +10,6 @@ class TemplateCard:
     category: str
     variables_in_order: list[str] = field(default_factory=list)
     variables_unique: list[str] = field(default_factory=list)
-    output_name_rule: str = "{%filename%}"
+    output_name_rule: str = "{%filename%} - {ДОЛЖНИК}"
     active: bool = True
 

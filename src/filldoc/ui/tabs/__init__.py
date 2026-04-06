@@ -1,2 +1,2 @@
-__all__ = ["projects_tab", "templates_tab", "fill_tab", "settings_tab"]
+__all__ = ["projects_tab", "templates_tab", "variables_tab", "settings_tab"]
 

@@ -8,7 +8,7 @@ import webbrowser
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QPoint, QByteArray, QEvent, QRect, QSize, QTimer, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QFont, QIcon, QImage, QKeySequence, QPixmap, QPainter, QShortcut, QTextOption
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QFont, QFontMetrics, QIcon, QImage, QKeySequence, QPen, QPixmap, QPainter, QShortcut, QTextOption
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -46,6 +46,7 @@ except ImportError:
 from filldoc.core.settings import AppSettings
 from filldoc.excel.excel_store import ExcelProjectStore
 from filldoc.excel.models import Project
+from filldoc.ui.icons import make_icon as _icons_make_icon, SVG_REFRESH, SVG_SAVE, SVG_ADD, SVG_FOLDER_OPEN, SVG_UPLOAD, SVG_LINK
 
 PROJECT_NAME_FIELD = "Имя проекта"
 
@@ -81,58 +82,14 @@ _CARD_VALUE_COL_MIN_W = 220
 _CARD_COL_GAP = 0
 _CARD_COL_STEP = 12
 
-# ── SVG-иконки ──────────────────────────────────────────────────────────────
+# ── SVG-иконки (алиасы из общего модуля) ─────────────────────────────────────
 
-_SVG_REFRESH = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2.2"
-     stroke-linecap="round" stroke-linejoin="round">
-  <path d="M1 4v6h6"/>
-  <path d="M23 20v-6h-6"/>
-  <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/>
-</svg>"""
-
-_SVG_SAVE = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2.2"
-     stroke-linecap="round" stroke-linejoin="round">
-  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-  <polyline points="17 21 17 13 7 13 7 21"/>
-  <polyline points="7 3 7 8 15 8"/>
-</svg>"""
-
-_SVG_ADD = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2.2"
-     stroke-linecap="round" stroke-linejoin="round">
-  <circle cx="12" cy="12" r="10"/>
-  <line x1="12" y1="8" x2="12" y2="16"/>
-  <line x1="8"  y1="12" x2="16" y2="12"/>
-</svg>"""
-
-_SVG_FOLDER = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2.2"
-     stroke-linecap="round" stroke-linejoin="round">
-  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-</svg>"""
-
-_SVG_UPLOAD = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2.2"
-     stroke-linecap="round" stroke-linejoin="round">
-  <polyline points="16 16 12 12 8 16"/>
-  <line x1="12" y1="12" x2="12" y2="21"/>
-  <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
-</svg>"""
-
-_SVG_LINK = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2.2"
-     stroke-linecap="round" stroke-linejoin="round">
-  <path d="M10 13a5 5 0 0 1 0-7l1-1a5 5 0 0 1 7 7l-1 1"/>
-  <path d="M14 11a5 5 0 0 1 0 7l-1 1a5 5 0 0 1-7-7l1-1"/>
-</svg>"""
+_SVG_REFRESH = SVG_REFRESH
+_SVG_SAVE    = SVG_SAVE
+_SVG_ADD     = SVG_ADD
+_SVG_FOLDER  = SVG_FOLDER_OPEN
+_SVG_UPLOAD  = SVG_UPLOAD
+_SVG_LINK    = SVG_LINK
 
 # ── Стили ────────────────────────────────────────────────────────────────────
 
@@ -455,14 +412,7 @@ QScrollBar::sub-page:vertical { background: none; }
 # ── Вспомогательные функции ──────────────────────────────────────────────────
 
 def _make_icon(svg_src: str, color: str = "#ffffff", size: int = 18) -> QIcon:
-    svg_bytes = QByteArray(svg_src.replace("currentColor", color).encode())
-    renderer = QSvgRenderer(svg_bytes)
-    px = QPixmap(size, size)
-    px.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(px)
-    renderer.render(painter)
-    painter.end()
-    return QIcon(px)
+    return _icons_make_icon(svg_src, color, size)
 
 
 def _icon_btn(svg: str, tooltip: str, icon_color: str, bg: str, hover: str, pressed: str) -> QToolButton:
@@ -568,6 +518,15 @@ class _ProjectItemDelegate(QStyledItemDelegate):
             text,
         )
 
+        # Тонкая зачёркивающая линия для архивных элементов
+        if is_archived and text:
+            fm = QFontMetrics(font)
+            text_w = min(fm.horizontalAdvance(text), text_rect.width())
+            mid_y = text_rect.top() + text_rect.height() // 2
+            strike_color = QColor("#9aa4b0") if not is_selected else QColor("#7090c0")
+            painter.setPen(QPen(strike_color, 1))
+            painter.drawLine(text_rect.left(), mid_y, text_rect.left() + text_w, mid_y)
+
         painter.restore()
 
     def sizeHint(self, option, index) -> QSize:  # noqa: ANN001
@@ -575,10 +534,133 @@ class _ProjectItemDelegate(QStyledItemDelegate):
         return QSize(w, self._H)
 
 
+class _NameOverlay(QWidget):
+    """Плавающая карточка-продолжение: появляется поверх элемента списка и показывает
+    полное имя проекта как визуальное продолжение усечённого текста."""
+
+    # Отступы текста должны совпадать с _ProjectItemDelegate
+    _PAD_L = 20
+    _PAD_R = 16
+
+    def __init__(self) -> None:
+        super().__init__(
+            None,
+            Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint,
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+        self._label = QLabel()
+        _f = QFont("Bahnschrift")
+        _f.setPointSizeF(10.2)
+        _f.setWeight(QFont.Weight.Medium)
+        _f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 102.0)
+        self._label.setFont(_f)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(self._PAD_L, 0, self._PAD_R, 0)
+        lay.addWidget(self._label)
+
+    def show_for(self, text: str, item_global_rect: QRect, *, is_archived: bool) -> None:
+        """Позиционирует и показывает оверлей поверх элемента, если текст не помещается."""
+        if is_archived:
+            bg, border, fg = "#f4f4f5", "#d0d0d2", "#858b94"
+        else:
+            bg, border, fg = "#ffffff", "#b7cbec", "#1e2a38"
+
+        self._label.setStyleSheet(f"color: {fg}; background: transparent;")
+        self._label.setText(text)
+        self.setStyleSheet(
+            f"QWidget {{ background-color: {bg}; border: 1px solid {border};"
+            f" border-radius: 10px; }}"
+        )
+
+        self._label.adjustSize()
+        needed_w = self._label.width() + self._PAD_L + self._PAD_R + 4
+
+        # Если текст и так помещается — не показываем
+        if needed_w <= item_global_rect.width():
+            self.hide()
+            return
+
+        x = item_global_rect.x() + 2
+        y = item_global_rect.y() + 2
+        h = item_global_rect.height() - 6
+
+        # Не выходить за правый край экрана
+        screen = self.screen()
+        if screen:
+            max_x = screen.geometry().right() - 8
+            needed_w = min(needed_w, max_x - x)
+
+        self.setGeometry(x, y, needed_w, h)
+        self.show()
+        self.raise_()
+
+
 class _ProjectListWidget(QListWidget):
     """Список проектов с reorder и дропом JSON на конкретную строку."""
 
     json_dropped = Signal(str, int)
+
+    # Параметры шрифта делегата (для измерения ширины текста)
+    _FONT_FAMILY = "Bahnschrift"
+    _FONT_PT = 10.2
+    _TEXT_MARGINS = 34  # 20 left + 14 right (в делегате)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._overlay = _NameOverlay()
+        self._pending_item: QListWidgetItem | None = None
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(100)
+        self._hover_timer.timeout.connect(self._commit_overlay)
+
+    def _text_fits(self, item: QListWidgetItem) -> bool:
+        font = QFont(self._FONT_FAMILY)
+        font.setPointSizeF(self._FONT_PT)
+        font.setWeight(QFont.Weight.Medium)
+        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 102.0)
+        available = self.viewport().width() - self._TEXT_MARGINS
+        return QFontMetrics(font).horizontalAdvance(item.text()) <= available
+
+    def _commit_overlay(self) -> None:
+        item = self._pending_item
+        if item is None or self._text_fits(item):
+            self._overlay.hide()
+            return
+        item_rect = self.visualItemRect(item)
+        tl = self.viewport().mapToGlobal(item_rect.topLeft())
+        bg = item.data(Qt.ItemDataRole.BackgroundRole)
+        is_archived = bg is not None and isinstance(bg, QColor)
+        self._overlay.show_for(
+            item.text(), QRect(tl, item_rect.size()), is_archived=is_archived
+        )
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: ANN001
+        item = self.itemAt(event.position().toPoint())
+        if item is not self._pending_item:
+            self._pending_item = item
+            self._overlay.hide()
+            self._hover_timer.stop()
+            if item is not None:
+                self._hover_timer.start()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: ANN001
+        self._pending_item = None
+        self._hover_timer.stop()
+        self._overlay.hide()
+        super().leaveEvent(event)
+
+    def hideEvent(self, event) -> None:  # noqa: ANN001
+        self._overlay.hide()
+        super().hideEvent(event)
+
+    def scrollContentsBy(self, dx: int, dy: int) -> None:
+        self._overlay.hide()
+        super().scrollContentsBy(dx, dy)
 
     @staticmethod
     def _json_paths(event) -> list[str]:  # noqa: ANN001
@@ -674,6 +756,64 @@ QFrame {
                 event.acceptProposedAction()
                 return
         event.ignore()
+
+
+# ── Поле пути с коротким отображением ───────────────────────────────────────
+
+class _PathLineEdit(QLineEdit):
+    """QLineEdit, показывающий укороченный путь (~ вместо домашней директории) когда не в фокусе."""
+
+    @staticmethod
+    def _shorten(path: str) -> str:
+        if not path:
+            return path
+        home_norm = str(Path.home()).replace("\\", "/")
+        path_norm = path.replace("\\", "/")
+        if path_norm.lower().startswith((home_norm + "/").lower()):
+            return "~/" + path_norm[len(home_norm) + 1:]
+        if path_norm.lower() == home_norm.lower():
+            return "~"
+        return path
+
+    @staticmethod
+    def _expand(path: str) -> str:
+        if path.startswith("~/") or path == "~":
+            home = str(Path.home()).replace("\\", "/")
+            return home + path[1:]
+        return path
+
+    def setText(self, text: str) -> None:
+        self.setProperty("_full_path", text)
+        if self.hasFocus():
+            super().setText(text)
+        else:
+            self.blockSignals(True)
+            super().setText(self._shorten(text))
+            self.blockSignals(False)
+
+    def text(self) -> str:
+        full = self.property("_full_path")
+        return full if full is not None else super().text()
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        full = self.property("_full_path") or ""
+        if full and super().text() != full:
+            self.blockSignals(True)
+            super().setText(full)
+            self.blockSignals(False)
+            self.end(False)
+
+    def focusOutEvent(self, event) -> None:
+        raw = super().text()
+        full = self._expand(raw)
+        self.setProperty("_full_path", full)
+        super().focusOutEvent(event)
+        shortened = self._shorten(full)
+        if super().text() != shortened:
+            self.blockSignals(True)
+            super().setText(shortened)
+            self.blockSignals(False)
 
 
 # ── Авто-изменяемый QTextEdit ────────────────────────────────────────────────
@@ -773,8 +913,33 @@ class ProjectsTab(QWidget):
         splitter.setChildrenCollapsible(False)
         root.addWidget(splitter, 1)
 
+        # ── Левая панель: фильтр + список ─────────────────────────────────────
+        left_panel = QWidget()
+        left_panel.setMinimumWidth(180)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(4)
+
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("Поиск проекта...")
+        self._filter_edit.setClearButtonEnabled(True)
+        self._filter_edit.setStyleSheet("""
+QLineEdit {
+    border: 1px solid #d8e0ea;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-size: 12px;
+    background: #f8fafc;
+    color: #1e2a38;
+}
+QLineEdit:focus {
+    border-color: #5b9bd5;
+    background: #ffffff;
+}
+""")
+        left_layout.addWidget(self._filter_edit)
+
         self.list = _ProjectListWidget(self)
-        self.list.setMinimumWidth(180)
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.list.setDragEnabled(True)
         self.list.setAcceptDrops(True)
@@ -784,7 +949,9 @@ class ProjectsTab(QWidget):
         self.list.setStyleSheet(_PROJECT_LIST_STYLE)
         self.list.setItemDelegate(_ProjectItemDelegate(self.list))
         self.list.setSpacing(4)
-        splitter.addWidget(self.list)
+        left_layout.addWidget(self.list, 1)
+
+        splitter.addWidget(left_panel)
 
         # ── Вкладки ────────────────────────────────────────────────────────
         self.tabs = QTabWidget()
@@ -835,6 +1002,7 @@ class ProjectsTab(QWidget):
         self.list.json_dropped.connect(self._on_project_list_json_dropped)
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.table.itemChanged.connect(self._schedule_autosave)
+        self._filter_edit.textChanged.connect(self._apply_filter)
 
     # ── Построение вкладки «Карточка» ────────────────────────────────────────
 
@@ -1433,27 +1601,52 @@ class ProjectsTab(QWidget):
             self._render_project(project)
 
         self._schedule_autosave()
-        QMessageBox.information(
-            self,
-            "JSON",
-            (
-                f"Дозаполнение проекта завершено.\n\n"
-                f"Добавлено полей: {added_count}\n"
-                f"Заменено полей: {replaced_count}\n"
-                f"Оставлено без изменений: {kept_count}"
-            ),
+        self._show_status(
+            f"JSON загружен: +{added_count} новых, ~{replaced_count} обновлено, {kept_count} без изменений"
         )
 
     # ── Список проектов ───────────────────────────────────────────────────────
 
     def _add_project_to_list(self, project: Project, *, archived: bool = False) -> None:
-        item = QListWidgetItem(self._project_display_name(project))
+        name = self._project_display_name(project)
+        item = QListWidgetItem(name)
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
         item.setData(Qt.ItemDataRole.UserRole, project)
         if archived:
             item.setForeground(QColor("#777777"))
             item.setBackground(QColor("#f2f2f2"))
         self.list.addItem(item)
+
+    def _apply_filter(self, text: str) -> None:
+        """При пустом запросе восстанавливает нормальный вид; при непустом — показывает
+        совпадающие проекты из обоих списков (архивные — зачёркнутым стилем)."""
+        query = text.strip().lower()
+        if not query:
+            if self._showing_archive:
+                self._show_archived_projects()
+            else:
+                self._show_current_projects()
+            return
+
+        def _matches(p: Project) -> bool:
+            label = self._project_display_name(p).lower()
+            extra = " ".join(str(v) for v in p.fields.values()).lower()
+            return query in label or query in extra
+
+        self.list.clear()
+        for p in self._projects:
+            if _matches(p):
+                self._add_project_to_list(p, archived=False)
+        for p in self._archived_projects:
+            if _matches(p):
+                self._add_project_to_list(p, archived=True)
+
+        if self.list.count() > 0:
+            self.list.setCurrentRow(0)
+        else:
+            self._current = None
+            self.table.setRowCount(0)
+            self._clear_card_display()
 
     def _project_display_name(self, project: Project) -> str:
         name = (project.fields.get(PROJECT_NAME_FIELD) or "").strip()
@@ -1476,8 +1669,9 @@ class ProjectsTab(QWidget):
             item = self.list.item(i)
             if item is None or item.data(Qt.ItemDataRole.UserRole) is not project:
                 continue
+            name = self._project_display_name(project)
             self.list.itemChanged.disconnect(self._on_list_item_edited)
-            item.setText(self._project_display_name(project))
+            item.setText(name)
             self.list.itemChanged.connect(self._on_list_item_edited)
             break
 
@@ -1514,8 +1708,17 @@ class ProjectsTab(QWidget):
                 self._show_current_projects()
             return
 
-        if self._showing_archive:
+        # Определяем статус элемента по его реальной принадлежности к архиву,
+        # а не по глобальному флагу (важно при поиске в смешанном режиме).
+        item_project = item.data(Qt.ItemDataRole.UserRole)
+        item_is_archived = (
+            isinstance(item_project, Project)
+            and item_project in self._archived_projects
+        )
+
+        if item_is_archived:
             unarchive_action = menu.addAction("Убрать из архива")
+            delete_archived_action = menu.addAction("Удалить")
         else:
             archive_action = menu.addAction("В архив")
             delete_action = menu.addAction("Удалить")
@@ -1530,12 +1733,14 @@ class ProjectsTab(QWidget):
             return
         self.list.setCurrentRow(row)
 
-        if not self._showing_archive and chosen_action == archive_action:
-            self._archive_current()
-        elif not self._showing_archive and chosen_action == delete_action:
-            self._delete_current()
-        elif self._showing_archive and chosen_action == unarchive_action:
+        if item_is_archived and chosen_action == unarchive_action:
             self._unarchive_current()
+        elif item_is_archived and chosen_action == delete_archived_action:
+            self._delete_archived_current()
+        elif not item_is_archived and chosen_action == archive_action:
+            self._archive_current()
+        elif not item_is_archived and chosen_action == delete_action:
+            self._delete_current()
 
     def _show_current_projects(self) -> None:
         self._showing_archive = False
@@ -1627,6 +1832,51 @@ class ProjectsTab(QWidget):
             return
         self._reload_from_excel(keep_mode="archive")
 
+    def _delete_archived_current(self) -> None:
+        if not self._settings.excel_path:
+            QMessageBox.warning(self, "Архив", "Не указан путь к Excel-файлу проектов (см. Настройки).")
+            return
+        row = self.list.currentRow()
+        if row < 0 or row >= self.list.count():
+            QMessageBox.warning(self, "Удаление", "Не выбран проект для удаления.")
+            return
+        item = self.list.item(row)
+        if item is None:
+            QMessageBox.warning(self, "Удаление", "Не выбран проект для удаления.")
+            return
+        project = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(project, Project):
+            QMessageBox.warning(self, "Удаление", "Не удалось определить выбранный проект.")
+            return
+
+        title = self._project_display_name(project)
+        answer = QMessageBox.question(
+            self, "Удаление архивного проекта",
+            f"Удалить проект из архива:\n{title}?\n\nЭто действие необратимо.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            store = ExcelProjectStore(self._settings.excel_path)
+            store.delete_project_from_archive(project)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Удаление", f"Не удалось удалить проект из архива:\n{e}")
+            return
+
+        if project in self._archived_projects:
+            self._archived_projects.remove(project)
+        self._card_custom_keys.pop(project.project_id, None)
+        self.list.takeItem(row)
+
+        if self._archived_projects:
+            self.list.setCurrentRow(min(row, len(self._archived_projects) - 1))
+        else:
+            self._current = None
+            self.table.setRowCount(0)
+            self._clear_card_display()
+
     def _reload_from_excel(self, *, keep_mode: str = "current") -> None:
         if not self._settings.excel_path:
             return
@@ -1641,6 +1891,19 @@ class ProjectsTab(QWidget):
             self._show_archived_projects()
         else:
             self._show_current_projects()
+        # Если был активен поиск — восстанавливаем его
+        filter_text = self._filter_edit.text()
+        if filter_text.strip():
+            self._apply_filter(filter_text)
+
+    # ── Статус-бар ────────────────────────────────────────────────────────────
+
+    def _show_status(self, message: str, timeout_ms: int = 4000) -> None:
+        mw = self.window()
+        if hasattr(mw, "show_status"):
+            mw.show_status(message, timeout_ms)
+
+    # ── Настройки ─────────────────────────────────────────────────────────────
 
     def set_settings(self, s: AppSettings) -> None:
         self._settings = s
@@ -1669,6 +1932,9 @@ class ProjectsTab(QWidget):
             for p in self._projects:
                 self._refresh_project_name(p)
 
+            self._filter_edit.blockSignals(True)
+            self._filter_edit.clear()
+            self._filter_edit.blockSignals(False)
             self.list.clear()
             for p in self._projects:
                 self._add_project_to_list(p, archived=False)
@@ -1844,10 +2110,7 @@ class ProjectsTab(QWidget):
             store = ExcelProjectStore(self._settings.excel_path)
             store.save_all_projects(self._projects, self._archived_projects)
             if not silent:
-                QMessageBox.information(
-                    self, "Проекты",
-                    "Все изменения синхронизированы с Excel (с созданием резервной копии).",
-                )
+                self._show_status("Все изменения синхронизированы с Excel")
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Проекты", str(e))
 
@@ -1866,7 +2129,7 @@ class ProjectsTab(QWidget):
         path_label.setStyleSheet(
             "color: #5b6a7a; font-size: 11px; font-weight: 600; min-width: 42px;"
         )
-        self._docs_path_edit = QLineEdit()
+        self._docs_path_edit = _PathLineEdit()
         self._docs_path_edit.setPlaceholderText("Путь к папке документов для этого проекта…")
         self._docs_path_edit.setStyleSheet(_FIXED_VALUE_STYLE)
 
@@ -2433,10 +2696,7 @@ QPushButton:disabled { color: #b0bcc8; }
         """Открывает папку документов в проводнике."""
         path = self._docs_path_edit.text().strip()
         if not path:
-            QMessageBox.information(
-                self, "Открыть папку",
-                "Укажите путь к папке с документами.",
-            )
+            self._show_status("Укажите путь к папке с документами")
             return
         p = Path(path)
         if not p.is_dir():

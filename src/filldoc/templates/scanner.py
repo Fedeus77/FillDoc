@@ -34,25 +34,53 @@ class TemplateLibrary:
             try:
                 rel = p.relative_to(root)
             except Exception:  # noqa: BLE001
-                rel = p.name
+                rel = Path(p.name)
             category = str(rel.parent) if hasattr(rel, "parent") else ""
             variables_in_order, variables_unique = extract_docx_variables(str(p))
+
+            # Читаем существующий кеш, чтобы сохранить ручные правки output_name_rule
+            cached = self._load_card(root, rel if isinstance(rel, Path) else Path(p.name))
+            output_name_rule = cached.output_name_rule if cached is not None else "{%filename%} - {ДОЛЖНИК}"
+
             card = TemplateCard(
                 name=p.stem,
                 path=str(p),
                 category=category if category != "." else "",
                 variables_in_order=variables_in_order,
                 variables_unique=variables_unique,
+                output_name_rule=output_name_rule,
             )
             cards.append(card)
             self._save_card(root, rel if isinstance(rel, Path) else Path(p.name), card)
         return sorted(cards, key=lambda c: (c.category.lower(), c.name.lower()))
 
+    def _load_card(self, root: Path, rel: Path) -> TemplateCard | None:
+        """Загружает сохранённую карточку из JSON-кеша; возвращает None если не найдена."""
+        try:
+            path = _card_path(root, rel)
+            if not path.exists():
+                return None
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return TemplateCard(
+                name=data.get("name", ""),
+                path=data.get("path", ""),
+                category=data.get("category", ""),
+                variables_in_order=data.get("variables_in_order", []),
+                variables_unique=data.get("variables_unique", []),
+                output_name_rule=data.get("output_name_rule", "{%filename%} - {ДОЛЖНИК}"),
+                active=data.get("active", True),
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
     def _save_card(self, root: Path, rel: Path, card: TemplateCard) -> None:
         try:
             d = _cards_dir(root)
             d.mkdir(parents=True, exist_ok=True)
-            _card_path(root, rel).write_text(json.dumps(asdict(card), ensure_ascii=False, indent=2), encoding="utf-8")
+            _card_path(root, rel).write_text(
+                json.dumps(asdict(card), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         except Exception as e:  # noqa: BLE001
             raise TemplateError(f"Не удалось сохранить карточку шаблона для '{card.name}': {e}") from e
 

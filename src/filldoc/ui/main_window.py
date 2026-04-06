@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QMainWindow, QTabWidget
 
 from filldoc.ui.tabs.projects_tab import ProjectsTab
@@ -14,7 +15,7 @@ from filldoc.core.settings import AppSettings
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("FillDoc (MVP)")
+        self.setWindowTitle("FillDoc")
         self.resize(1100, 700)
 
         self.tabs = QTabWidget(self)
@@ -30,8 +31,36 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.variables_tab, "Переменные")
         self.tabs.addTab(self.settings_tab, "Настройки")
 
+        self.statusBar().showMessage("Готово")
+
+        # ── Горячие клавиши ───────────────────────────────────────────────────
+        save_sc = QShortcut(QKeySequence("Ctrl+S"), self)
+        save_sc.activated.connect(self._hotkey_save)
+        refresh_sc = QShortcut(QKeySequence("Ctrl+R"), self)
+        refresh_sc.activated.connect(self._hotkey_refresh)
+
         self.settings_tab.settings_changed.connect(self._on_settings_changed)
         self._on_settings_changed()
+
+    def show_status(self, message: str, timeout_ms: int = 4000) -> None:
+        """Показывает сообщение в статус-баре вместо модального QMessageBox."""
+        self.statusBar().showMessage(message, timeout_ms)
+
+    def _hotkey_save(self) -> None:
+        """Ctrl+S: сохранить в зависимости от активной вкладки."""
+        idx = self.tabs.currentIndex()
+        if idx == 0:
+            self.projects_tab._save_all()
+        elif idx == 1:
+            self.templates_tab._save_to_excel()
+
+    def _hotkey_refresh(self) -> None:
+        """Ctrl+R: обновить в зависимости от активной вкладки."""
+        idx = self.tabs.currentIndex()
+        if idx == 0:
+            self.projects_tab._load_projects()
+        elif idx == 1:
+            self.templates_tab._reload_all()
 
     def _on_settings_changed(self) -> None:
         s: AppSettings = self.settings_tab.get_settings()
@@ -60,4 +89,3 @@ class MainWindow(QMainWindow):
             self.templates_tab._load_projects()
         if templates_ok:
             self.templates_tab._scan_templates()
-

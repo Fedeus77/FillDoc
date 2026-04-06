@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 import re
 
@@ -7,6 +8,8 @@ from docx import Document
 
 from filldoc.core.errors import GenerationError
 from filldoc.generator.filename_rules import safe_filename, ensure_unique_path
+
+log = logging.getLogger("filldoc.generator")
 
 
 def _replace_in_paragraph(paragraph, mapping: dict[str, str]) -> None:
@@ -20,7 +23,6 @@ def _replace_in_paragraph(paragraph, mapping: dict[str, str]) -> None:
     if not mapping or not paragraph.runs:
         return
 
-    # Строим один общий regex по всем ключам: \{(КЛЮЧ1|КЛЮЧ2|...)\}
     keys = [k for k in mapping.keys() if k]
     if not keys:
         return
@@ -40,11 +42,10 @@ def _replace_in_paragraph(paragraph, mapping: dict[str, str]) -> None:
             return
 
         start, end = m.span()
-        placeholder = m.group(0)  # например "{Заказчик}"
+        placeholder = m.group(0)
         inner = placeholder[1:-1]
         replacement = mapping.get(inner, "")
 
-        # Построим карту позиций runs в общем тексте
         positions = []
         pos = 0
         for r in runs:
@@ -58,7 +59,6 @@ def _replace_in_paragraph(paragraph, mapping: dict[str, str]) -> None:
             if not (e <= start or s >= end)
         ]
         if not overlapping:
-            # На всякий случай, чтобы не уйти в бесконечный цикл
             return
 
         first_run, first_s, first_e = overlapping[0]
@@ -67,7 +67,6 @@ def _replace_in_paragraph(paragraph, mapping: dict[str, str]) -> None:
         for r, s, e in overlapping:
             text = r.text or ""
             if r is first_run and r is last_run:
-                # Вся переменная внутри одного run
                 local_start = max(start - s, 0)
                 local_end = min(end - s, len(text))
                 before = text[:local_start]
@@ -82,13 +81,28 @@ def _replace_in_paragraph(paragraph, mapping: dict[str, str]) -> None:
                 after = text[local_end:]
                 r.text = after
             else:
-                # промежуточные куски переменной очищаем
                 r.text = ""
 
 
-def _replace_in_cell(cell, mapping: dict[str, str]) -> None:
-    for p in cell.paragraphs:
+def _replace_in_table(table, mapping: dict[str, str]) -> None:
+    """Обходит таблицу рекурсивно (поддержка вложенных таблиц)."""
+    for row in table.rows:
+        for cell in row.cells:
+            for p in cell.paragraphs:
+                _replace_in_paragraph(p, mapping)
+            # Рекурсивно обходим вложенные таблицы
+            for nested in cell.tables:
+                _replace_in_table(nested, mapping)
+
+
+def _replace_in_header_footer(hf_part, mapping: dict[str, str]) -> None:
+    """Заменяет переменные в колонтитуле (header или footer)."""
+    if hf_part.is_linked_to_previous:
+        return
+    for p in hf_part.paragraphs:
         _replace_in_paragraph(p, mapping)
+    for table in hf_part.tables:
+        _replace_in_table(table, mapping)
 
 
 def generate_docx_from_template(
@@ -102,13 +116,21 @@ def generate_docx_from_template(
     except Exception as e:  # noqa: BLE001
         raise GenerationError(f"Не удалось открыть шаблон для генерации: {e}") from e
 
+    # Основное тело документа
     for p in doc.paragraphs:
         _replace_in_paragraph(p, mapping)
 
     for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                _replace_in_cell(cell, mapping)
+        _replace_in_table(table, mapping)
+
+    # Колонтитулы всех секций
+    for section in doc.sections:
+        _replace_in_header_footer(section.header, mapping)
+        _replace_in_header_footer(section.footer, mapping)
+        _replace_in_header_footer(section.even_page_header, mapping)
+        _replace_in_header_footer(section.even_page_footer, mapping)
+        _replace_in_header_footer(section.first_page_header, mapping)
+        _replace_in_header_footer(section.first_page_footer, mapping)
 
     out_dir = Path(output_dir)
     if not out_dir.exists():
@@ -119,7 +141,7 @@ def generate_docx_from_template(
 
     try:
         doc.save(str(out_path))
+        log.info("Generated: %s", out_path)
         return str(out_path)
     except Exception as e:  # noqa: BLE001
         raise GenerationError(f"Не удалось сохранить готовый документ: {e}") from e
-
