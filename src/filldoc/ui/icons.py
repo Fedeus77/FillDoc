@@ -116,3 +116,17 @@ def icon_btn(
     btn.setStyleSheet(_BTN_STYLE.format(bg=bg, hover=hover, pressed=pressed))
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     return btn
+
+
+def update_icon_btn(
+    btn: QToolButton,
+    svg: str,
+    icon_color: str = "#ffffff",
+    bg: str = "#8A9BB0",
+    hover: str = "#6B7F96",
+    pressed: str = "#556477",
+    icon_size: int = 18,
+) -> None:
+    """Обновляет иконку и стиль существующей кнопки (для смены темы)."""
+    btn.setIcon(make_icon(svg, icon_color, icon_size))
+    btn.setStyleSheet(_BTN_STYLE.format(bg=bg, hover=hover, pressed=pressed))

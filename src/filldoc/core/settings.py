@@ -23,6 +23,8 @@ class AppSettings:
     docs_dir: str = ""
     # Пути к папкам документов для каждого проекта: {project_id: path}
     project_docs_dirs: dict = field(default_factory=dict)
+    # Тема интерфейса: "dark" | "light"
+    theme: str = "dark"
 
     @staticmethod
     def load() -> "AppSettings":
@@ -32,12 +34,15 @@ class AppSettings:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             raw_dirs = data.get("project_docs_dirs", {})
+            raw_theme = data.get("theme", "dark")
+            theme = raw_theme if raw_theme in ("dark", "light") else "dark"
             return AppSettings(
                 excel_path=str(data.get("excel_path", "")),
                 templates_dir=str(data.get("templates_dir", "")),
                 output_dir=str(data.get("output_dir", "")),
                 docs_dir=str(data.get("docs_dir", "")),
                 project_docs_dirs=raw_dirs if isinstance(raw_dirs, dict) else {},
+                theme=theme,
             )
         except Exception as e:  # noqa: BLE001
             raise SettingsError(f"Не удалось прочитать настройки: {e}") from e

@@ -3,13 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QMainWindow, QTabWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
 
 from filldoc.ui.tabs.projects_tab import ProjectsTab
 from filldoc.ui.tabs.templates_tab import TemplatesTab
 from filldoc.ui.tabs.variables_tab import VariablesTab
 from filldoc.ui.tabs.settings_tab import SettingsTab
 from filldoc.core.settings import AppSettings
+from filldoc.ui.theme import ThemeManager, build_global_stylesheet
 
 
 class MainWindow(QMainWindow):
@@ -33,6 +34,9 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage("Готово")
 
+        # Применяем начальную тему
+        self._apply_theme_to_all()
+
         # ── Горячие клавиши ───────────────────────────────────────────────────
         save_sc = QShortcut(QKeySequence("Ctrl+S"), self)
         save_sc.activated.connect(self._hotkey_save)
@@ -40,11 +44,28 @@ class MainWindow(QMainWindow):
         refresh_sc.activated.connect(self._hotkey_refresh)
 
         self.settings_tab.settings_changed.connect(self._on_settings_changed)
+        self.settings_tab.theme_changed.connect(self._on_theme_changed)
         self._on_settings_changed()
 
     def show_status(self, message: str, timeout_ms: int = 4000) -> None:
         """Показывает сообщение в статус-баре вместо модального QMessageBox."""
         self.statusBar().showMessage(message, timeout_ms)
+
+    def _on_theme_changed(self, theme_name: str) -> None:
+        """Применяет новую тему ко всему приложению."""
+        tm = ThemeManager.instance()
+        tm.set_theme(theme_name)
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(build_global_stylesheet(tm.colors))
+        self._apply_theme_to_all()
+
+    def _apply_theme_to_all(self) -> None:
+        """Обновляет тему во всех вкладках."""
+        c = ThemeManager.instance().colors
+        for tab in (self.projects_tab, self.templates_tab, self.variables_tab, self.settings_tab):
+            if hasattr(tab, "apply_theme"):
+                tab.apply_theme(c)
 
     def _hotkey_save(self) -> None:
         """Ctrl+S: сохранить в зависимости от активной вкладки."""
@@ -65,14 +86,12 @@ class MainWindow(QMainWindow):
     def _on_settings_changed(self) -> None:
         s: AppSettings = self.settings_tab.get_settings()
 
-        # Сохраняем project_docs_dirs из живого состояния projects_tab —
-        # они могут быть новее, чем то, что успел запомнить settings_tab.
+        # Сохраняем project_docs_dirs из живого состояния projects_tab
         existing = getattr(self.projects_tab, "_settings", None)
         if existing and existing.project_docs_dirs:
             merged = dict(existing.project_docs_dirs)
-            merged.update(s.project_docs_dirs)   # настройки из UI имеют приоритет
+            merged.update(s.project_docs_dirs)
             s.project_docs_dirs = merged
-            # Синхронизируем обратно в settings_tab, чтобы его _save не затёр пути.
             self.settings_tab._settings.project_docs_dirs = dict(s.project_docs_dirs)
 
         self.projects_tab.set_settings(s)

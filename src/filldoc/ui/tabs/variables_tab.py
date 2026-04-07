@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from filldoc.core.settings import AppSettings
 from filldoc.excel.excel_store import ExcelProjectStore
+from filldoc.ui.theme import ThemeColors, ThemeManager
 
 # ── SVG иконки ───────────────────────────────────────────────────────────────
 
@@ -205,6 +206,7 @@ class VariablesTab(QWidget):
 
         desc = QLabel("Переменные из таблицы Excel — используйте в шаблонах:")
         desc.setStyleSheet(_DESC_STYLE)
+        self._desc_label = desc
         top.addWidget(desc, 1)
 
         self.open_excel_btn = _open_excel_btn()
@@ -219,6 +221,7 @@ class VariablesTab(QWidget):
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setFrameShadow(QFrame.Shadow.Sunken)
         sep.setStyleSheet("color: #dde2ea;")
+        self._sep = sep
         root.addWidget(sep)
 
         # ── Список переменных ─────────────────────────────────────────
@@ -244,6 +247,38 @@ class VariablesTab(QWidget):
 
     def set_settings(self, s: AppSettings) -> None:
         self._settings = s
+
+    def apply_theme(self, c: ThemeColors) -> None:
+        """Применяет тему ко всем виджетам вкладки."""
+        # Описание
+        self._desc_label.setStyleSheet(
+            f"QLabel {{ font-size: 12px; color: {c.text_secondary}; padding: 2px 0px 6px 0px; }}"
+        )
+
+        # Разделитель
+        self._sep.setStyleSheet(f"color: {c.separator};")
+
+        # Кнопки
+        self.refresh_btn.setIcon(_make_icon(_SVG_REFRESH, c.icon_color, 18))
+        self.refresh_btn.setStyleSheet(
+            _REFRESH_BTN_STYLE.format(bg=c.icon_btn_bg, hover=c.icon_btn_hover, pressed=c.icon_btn_pressed)
+        )
+        self.open_excel_btn.setIcon(_make_icon(_SVG_EXCEL, c.success, 18))
+        self.open_excel_btn.setStyleSheet(f"""
+QToolButton {{
+    background-color: transparent;
+    border: none;
+    border-radius: 9px;
+    min-width: 34px; min-height: 34px;
+    max-width: 34px; max-height: 34px;
+}}
+QToolButton:hover {{ background-color: {c.icon_btn_ghost_hover}; }}
+QToolButton:pressed {{ background-color: {c.icon_btn_pressed}; }}
+""")
+
+        # Перерисовываем список переменных (с обновлёнными цветами)
+        if self._headers:
+            self._render_list()
 
     # ── Загрузка данных ───────────────────────────────────────────────────────
 
@@ -306,9 +341,10 @@ class VariablesTab(QWidget):
 
     def _show_empty(self, msg: str) -> None:
         self._clear_list()
+        c = ThemeManager.instance().colors
         lbl = QLabel(msg)
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet(_EMPTY_STYLE)
+        lbl.setStyleSheet(f"QLabel {{ font-size: 13px; color: {c.text_muted}; padding: 24px; }}")
         self._list_layout.addWidget(lbl)
         self._list_layout.addStretch(1)
 
@@ -326,8 +362,12 @@ class VariablesTab(QWidget):
         self._list_layout.addStretch(1)
 
     def _make_var_row(self, var_text: str) -> QFrame:
+        c = ThemeManager.instance().colors
         frame = QFrame()
-        frame.setStyleSheet(_VAR_ROW_STYLE)
+        frame.setStyleSheet(f"""
+QFrame {{ background-color: transparent; border: none; border-radius: 3px; }}
+QFrame:hover {{ background-color: {c.bg_hover}; }}
+""")
         frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         lay = QHBoxLayout(frame)
@@ -335,11 +375,15 @@ class VariablesTab(QWidget):
         lay.setSpacing(4)
 
         copy_btn = QToolButton()
-        copy_btn.setIcon(_make_icon(_SVG_COPY, "#8A9BB0", 13))
+        copy_btn.setIcon(_make_icon(_SVG_COPY, c.text_muted, 13))
         copy_btn.setIconSize(QSize(13, 13))
         copy_btn.setFixedSize(20, 20)
         copy_btn.setToolTip("Копировать")
-        copy_btn.setStyleSheet(_COPY_BTN_STYLE)
+        copy_btn.setStyleSheet(f"""
+QToolButton {{ background-color: transparent; border: none; border-radius: 4px; padding: 2px; }}
+QToolButton:hover {{ background-color: {c.icon_btn_ghost_hover}; }}
+QToolButton:pressed {{ background-color: {c.icon_btn_pressed}; }}
+""")
         copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         copy_btn.clicked.connect(
             lambda _checked, t=var_text, b=copy_btn: self._copy_var(t, b)
@@ -347,7 +391,15 @@ class VariablesTab(QWidget):
         lay.addWidget(copy_btn)
 
         lbl = QLabel(var_text)
-        lbl.setStyleSheet(_VAR_LABEL_STYLE)
+        lbl.setStyleSheet(f"""
+QLabel {{
+    font-family: Consolas, 'Courier New', monospace;
+    font-size: 12px;
+    color: {c.text_accent};
+    padding: 0px;
+    background: transparent;
+}}
+""")
         lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         lay.addWidget(lbl, 1)
 
@@ -356,13 +408,14 @@ class VariablesTab(QWidget):
     # ── Копирование ───────────────────────────────────────────────────────────
 
     def _copy_var(self, text: str, btn: QToolButton) -> None:
+        c = ThemeManager.instance().colors
         QApplication.clipboard().setText(text)
-        btn.setIcon(_make_icon(_SVG_CHECK, "#2d8a4e", 14))
+        btn.setIcon(_make_icon(_SVG_CHECK, c.success, 14))
         btn.setToolTip("Скопировано!")
         QTimer.singleShot(
             1300,
             lambda: (
-                btn.setIcon(_make_icon(_SVG_COPY, "#8A9BB0", 14)),
+                btn.setIcon(_make_icon(_SVG_COPY, c.text_muted, 14)),
                 btn.setToolTip("Копировать"),
             ),
         )

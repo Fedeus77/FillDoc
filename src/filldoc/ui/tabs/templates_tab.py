@@ -36,7 +36,8 @@ from filldoc.generator.docx_generator import generate_docx_from_template
 from filldoc.templates.models import TemplateCard
 from filldoc.templates.scanner import TemplateLibrary
 from filldoc.variables.dictionary import default_dictionary
-from filldoc.ui.icons import make_icon, icon_btn, SVG_REFRESH, SVG_SAVE, SVG_FOLDER
+from filldoc.ui.icons import make_icon, icon_btn, update_icon_btn, SVG_REFRESH, SVG_SAVE, SVG_FOLDER
+from filldoc.ui.theme import ThemeColors, ThemeManager
 
 # Локальные псевдонимы для обратной совместимости с кодом ниже
 _SVG_REFRESH = SVG_REFRESH
@@ -302,6 +303,45 @@ class TemplatesTab(QWidget):
 
     def set_settings(self, s: AppSettings) -> None:
         self._settings = s
+
+    def apply_theme(self, c: ThemeColors) -> None:
+        """Применяет тему ко всем виджетам вкладки."""
+        # Кнопки-иконки
+        update_icon_btn(self.refresh_btn, _SVG_REFRESH, icon_color=c.icon_color,
+                        bg=c.icon_btn_bg, hover=c.icon_btn_hover, pressed=c.icon_btn_pressed)
+        update_icon_btn(self.save_btn, _SVG_SAVE, icon_color=c.icon_color,
+                        bg=c.icon_btn_bg, hover=c.icon_btn_hover, pressed=c.icon_btn_pressed)
+
+        # Открыть папку шаблонов
+        self.open_templates_dir_btn.setIcon(make_icon(SVG_FOLDER, c.text_secondary))
+
+        # Дерево шаблонов
+        self.tree.setStyleSheet(f"""
+QTreeWidget {{
+    background-color: {c.bg_panel};
+    color: {c.text_primary};
+    border: 1px solid {c.border_base};
+    border-radius: 8px;
+    outline: 0;
+    font-size: 13px;
+}}
+QTreeWidget::item {{ padding: 4px 6px; border-radius: 4px; }}
+QTreeWidget::item:selected {{
+    background-color: {c.selection_bg};
+    color: {c.selection_text};
+}}
+QTreeWidget::item:hover {{ background-color: {c.bg_hover}; }}
+QTreeWidget::branch {{ background-color: transparent; }}
+QScrollBar:vertical {{
+    background: {c.bg_scrollbar}; width: 6px; border-radius: 3px; margin: 6px 2px;
+}}
+QScrollBar::handle:vertical {{
+    background: {c.scrollbar_handle}; border-radius: 3px; min-height: 24px;
+}}
+QScrollBar::handle:vertical:hover {{ background: {c.scrollbar_handle_hover}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
+""")
 
     # ── Загрузка данных ───────────────────────────────────────────────────────
 

@@ -46,7 +46,8 @@ except ImportError:
 from filldoc.core.settings import AppSettings
 from filldoc.excel.excel_store import ExcelProjectStore
 from filldoc.excel.models import Project
-from filldoc.ui.icons import make_icon as _icons_make_icon, SVG_REFRESH, SVG_SAVE, SVG_ADD, SVG_FOLDER_OPEN, SVG_UPLOAD, SVG_LINK
+from filldoc.ui.icons import make_icon as _icons_make_icon, SVG_REFRESH, SVG_SAVE, SVG_ADD, SVG_FOLDER_OPEN, SVG_UPLOAD, SVG_LINK, update_icon_btn
+from filldoc.ui.theme import ThemeColors, ThemeManager
 
 PROJECT_NAME_FIELD = "Имя проекта"
 
@@ -326,7 +327,7 @@ def _auto_project_name(fields: dict[str, str]) -> str:
     creditor = _strip_legal_form(fields.get("Кредитор", "").strip())
     debtor   = _strip_legal_form(fields.get("Должник",  "").strip())
     if creditor and debtor:
-        return f"{creditor} — {debtor}"
+        return f"{creditor} - {debtor}"
     return creditor or debtor or ""
 
 
@@ -455,6 +456,13 @@ class _ProjectItemDelegate(QStyledItemDelegate):
     _RADIUS = 10     # скругление фона
     _ACCENT_W = 4    # ширина левой цветной полосы при выборе
 
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._c: ThemeColors = ThemeManager.instance().colors
+
+    def set_colors(self, c: ThemeColors) -> None:
+        self._c = c
+
     def paint(self, painter: QPainter, option, index) -> None:  # noqa: ANN001
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -467,20 +475,21 @@ class _ProjectItemDelegate(QStyledItemDelegate):
         is_archived = bg_role is not None and isinstance(bg_role, QColor)
 
         rect = option.rect.adjusted(2, 2, -2, -4)
+        c = self._c
 
         # ── Фон ──────────────────────────────────────────────────────
         if is_selected:
-            bg = QColor("#e5efff")
-            border = QColor("#b7cbec")
+            bg = QColor(c.bg_card_selected)
+            border = QColor(c.border_card_selected)
         elif is_hovered:
-            bg = QColor("#f3f7fc")
-            border = QColor("#d4deea")
+            bg = QColor(c.bg_card_hover)
+            border = QColor(c.border_card)
         elif is_archived:
-            bg = QColor("#f4f4f5")
-            border = QColor("#e1e1e3")
+            bg = QColor(c.bg_card_archived)
+            border = QColor(c.border_light)
         else:
-            bg = QColor("#ffffff")
-            border = QColor("#e3e9f1")
+            bg = QColor(c.bg_card)
+            border = QColor(c.border_card)
 
         painter.setPen(border)
         painter.setBrush(bg)
@@ -491,16 +500,16 @@ class _ProjectItemDelegate(QStyledItemDelegate):
             accent = QRect(rect.left() + 3, rect.top() + 7,
                            self._ACCENT_W, rect.height() - 14)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#4a90d9"))
+            painter.setBrush(QColor(c.accent_stripe))
             painter.drawRoundedRect(accent, 2, 2)
 
         # ── Текст ──────────────────────────────────────────────────────
         if is_selected:
-            text_color = QColor("#18345b")
+            text_color = QColor(c.selection_text)
         elif is_archived:
-            text_color = QColor("#858b94")
+            text_color = QColor(c.text_muted)
         else:
-            text_color = QColor("#1e2a38")
+            text_color = QColor(c.text_primary)
 
         font = QFont(option.font)
         font.setFamily("Bahnschrift")
@@ -523,7 +532,7 @@ class _ProjectItemDelegate(QStyledItemDelegate):
             fm = QFontMetrics(font)
             text_w = min(fm.horizontalAdvance(text), text_rect.width())
             mid_y = text_rect.top() + text_rect.height() // 2
-            strike_color = QColor("#9aa4b0") if not is_selected else QColor("#7090c0")
+            strike_color = QColor(c.text_muted) if not is_selected else QColor(c.text_secondary)
             painter.setPen(QPen(strike_color, 1))
             painter.drawLine(text_rect.left(), mid_y, text_rect.left() + text_w, mid_y)
 
@@ -563,10 +572,15 @@ class _NameOverlay(QWidget):
 
     def show_for(self, text: str, item_global_rect: QRect, *, is_archived: bool) -> None:
         """Позиционирует и показывает оверлей поверх элемента, если текст не помещается."""
+        c = ThemeManager.instance().colors
         if is_archived:
-            bg, border, fg = "#f4f4f5", "#d0d0d2", "#858b94"
+            bg = c.bg_card_archived
+            border = c.border_light
+            fg = c.text_muted
         else:
-            bg, border, fg = "#ffffff", "#b7cbec", "#1e2a38"
+            bg = c.bg_card
+            border = c.border_card_selected
+            fg = c.text_primary
 
         self._label.setStyleSheet(f"color: {fg}; background: transparent;")
         self._label.setText(text)
@@ -696,6 +710,81 @@ class _ProjectListWidget(QListWidget):
         super().dropEvent(event)
 
 
+# ── Строка папки документов с hover-reveal ───────────────────────────────────
+
+class _DocsFolderRow(QWidget):
+    """Строка выбора папки — поле пути и кнопка скрыты до наведения курсора."""
+
+    def __init__(
+        self,
+        path_edit: "QLineEdit",
+        browse_btn: "QPushButton",
+        open_btn: QToolButton,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setMouseTracking(True)
+
+        self._path_edit = path_edit
+        self._browse_btn = browse_btn
+        self._open_btn = open_btn
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+
+        self._label = QLabel("Папка:")
+        lay.addWidget(self._label)
+        lay.addWidget(path_edit, 1)
+        lay.addWidget(browse_btn)
+        lay.addWidget(open_btn)
+
+        self._set_revealed(False)
+        self._apply_label_style(revealed=False)
+
+    # ── Reveal / hide ─────────────────────────────────────────────────────────
+
+    def _set_revealed(self, revealed: bool) -> None:
+        self._path_edit.setVisible(revealed)
+        self._browse_btn.setVisible(revealed)
+        self._apply_label_style(revealed)
+
+    def _apply_label_style(self, revealed: bool) -> None:
+        c = ThemeManager.instance().colors
+        if revealed:
+            self._label.setStyleSheet(
+                f"color: {c.text_secondary}; font-size: 11px; font-weight: 600; min-width: 42px;"
+            )
+        else:
+            self._label.setStyleSheet(
+                f"color: {c.text_muted}; font-size: 11px; font-weight: 600; min-width: 42px;"
+            )
+
+    def apply_theme(self, c: "ThemeColors") -> None:
+        revealed = self._path_edit.isVisible()
+        self._apply_label_style(revealed)
+
+    # ── Hover events ──────────────────────────────────────────────────────────
+
+    def enterEvent(self, event) -> None:  # noqa: ANN001
+        self._set_revealed(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: ANN001
+        # Не скрываем, пока поле в фокусе (пользователь печатает путь)
+        if not self._path_edit.hasFocus():
+            self._set_revealed(False)
+        super().leaveEvent(event)
+
+    def _on_path_focus_lost(self) -> None:
+        """Вызывается когда поле пути теряет фокус."""
+        # Если курсор вышел за пределы — скрываем
+        if not self.rect().contains(self.mapFromGlobal(
+            self.cursor().pos()
+        )):
+            self._set_revealed(False)
+
+
 # ── Зона перетаскивания файлов ────────────────────────────────────────────────
 
 class _DropZone(QFrame):
@@ -703,27 +792,11 @@ class _DropZone(QFrame):
 
     file_dropped = Signal(str)
 
-    _NORMAL_STYLE = """
-QFrame {
-    background-color: #f8fafe;
-    border: 2px dashed #c0cfe0;
-    border-radius: 8px;
-}
-"""
-    _HOVER_STYLE = """
-QFrame {
-    background-color: #eef5fc;
-    border: 2px dashed #4A90D9;
-    border-radius: 8px;
-}
-"""
-
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setMinimumHeight(72)
         self.setMaximumHeight(90)
-        self.setStyleSheet(self._NORMAL_STYLE)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -731,24 +804,49 @@ QFrame {
 
         self._label = QLabel("Перетащите файл сюда для добавления в папку")
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._label.setStyleSheet(
-            "color: #7a90a8; font-size: 11px; background: transparent; border: none;"
-        )
         layout.addWidget(self._label)
+
+        self._apply_normal_style()
+
+    def _apply_normal_style(self) -> None:
+        c = ThemeManager.instance().colors
+        self.setStyleSheet(f"""
+QFrame {{
+    background-color: {c.bg_panel};
+    border: 2px dashed {c.border_base};
+    border-radius: 8px;
+}}
+""")
+        self._label.setStyleSheet(
+            f"color: {c.text_muted}; font-size: 11px; background: transparent; border: none;"
+        )
+
+    def _apply_hover_style(self) -> None:
+        c = ThemeManager.instance().colors
+        self.setStyleSheet(f"""
+QFrame {{
+    background-color: {c.bg_card_hover};
+    border: 2px dashed {c.accent};
+    border-radius: 8px;
+}}
+""")
+
+    def apply_theme(self, _c: ThemeColors) -> None:
+        self._apply_normal_style()
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
-            self.setStyleSheet(self._HOVER_STYLE)
+            self._apply_hover_style()
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragLeaveEvent(self, event) -> None:  # noqa: ANN001
-        self.setStyleSheet(self._NORMAL_STYLE)
+        self._apply_normal_style()
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event: QDropEvent) -> None:
-        self.setStyleSheet(self._NORMAL_STYLE)
+        self._apply_normal_style()
         for url in event.mimeData().urls():
             path = url.toLocalFile()
             if path and Path(path).is_file():
@@ -831,7 +929,22 @@ class _AutoResizeTextEdit(QTextEdit):
         self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         self.setAcceptRichText(False)
-        self.setStyleSheet(_TEXTEDIT_STYLE)
+        c = ThemeManager.instance().colors
+        self.setStyleSheet(f"""
+QTextEdit {{
+    background-color: {c.bg_input};
+    border: 1px solid {c.border_input};
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 12px;
+    color: {c.text_primary};
+    selection-background-color: {c.selection_bg};
+}}
+QTextEdit:focus {{
+    border-color: {c.border_input_focus};
+    background-color: {c.bg_input_focus};
+}}
+""")
         self.setContentsMargins(0, 0, 0, 0)
         self.document().setDocumentMargin(0)
         self.document().documentLayout().documentSizeChanged.connect(
@@ -905,6 +1018,7 @@ class ProjectsTab(QWidget):
         hint = QLabel("Перетащите .json-файл в окно для загрузки проекта")
         hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         hint.setStyleSheet("color: #888; font-style: italic; font-size: 11px;")
+        self._hint_label = hint
         top.addWidget(hint)
 
         # ── Сплиттер (левый список + правые вкладки) ──────────────────────
@@ -947,7 +1061,8 @@ QLineEdit:focus {
         self.list.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.list.setMouseTracking(True)
         self.list.setStyleSheet(_PROJECT_LIST_STYLE)
-        self.list.setItemDelegate(_ProjectItemDelegate(self.list))
+        self._delegate = _ProjectItemDelegate(self.list)
+        self.list.setItemDelegate(self._delegate)
         self.list.setSpacing(4)
         left_layout.addWidget(self.list, 1)
 
@@ -1004,6 +1119,401 @@ QLineEdit:focus {
         self.table.itemChanged.connect(self._schedule_autosave)
         self._filter_edit.textChanged.connect(self._apply_filter)
 
+    # ── Тема ─────────────────────────────────────────────────────────────────
+
+    def _docs_list_style(self) -> str:
+        c = ThemeManager.instance().colors
+        return f"""
+QListWidget {{
+    background-color: {c.bg_panel};
+    border: 1px solid {c.border_base};
+    border-radius: 6px;
+    padding: 3px;
+    font-size: 12px;
+    outline: 0;
+    color: {c.text_primary};
+}}
+QListWidget::item {{ padding: 4px 8px; border-radius: 3px; }}
+QListWidget::item:selected {{
+    background: {c.selection_bg};
+    color: {c.selection_text};
+}}
+QListWidget::item:hover {{ background: {c.bg_hover}; }}
+QScrollBar:vertical {{
+    background: {c.bg_scrollbar}; width: 6px; border-radius: 3px; margin: 4px 2px;
+}}
+QScrollBar::handle:vertical {{
+    background: {c.scrollbar_handle}; border-radius: 3px; min-height: 24px;
+}}
+QScrollBar::handle:vertical:hover {{ background: {c.scrollbar_handle_hover}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+"""
+
+    def _preview_scroll_style(self, c: "ThemeColors | None" = None) -> str:
+        if c is None:
+            c = ThemeManager.instance().colors
+        return f"""
+QScrollArea {{
+    background: {c.bg_panel};
+    border: 1px solid {c.border_base};
+    border-radius: 6px;
+}}
+QScrollBar:vertical {{
+    background: {c.bg_scrollbar}; width: 6px; border-radius: 3px; margin: 4px 2px;
+}}
+QScrollBar::handle:vertical {{
+    background: {c.scrollbar_handle}; border-radius: 3px; min-height: 24px;
+}}
+QScrollBar::handle:vertical:hover {{ background: {c.scrollbar_handle_hover}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+"""
+
+    def _rename_btn_style(self, c: "ThemeColors | None" = None) -> str:
+        if c is None:
+            c = ThemeManager.instance().colors
+        return f"""
+QPushButton {{
+    background: {c.accent};
+    border: none;
+    border-radius: 4px;
+    padding: 2px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: {c.accent_text};
+    min-height: 22px;
+}}
+QPushButton:hover {{ background: {c.accent_hover}; }}
+QPushButton:pressed {{ background: {c.accent_pressed}; }}
+QPushButton:disabled {{ background: {c.accent_disabled}; color: {c.text_muted}; }}
+"""
+
+    def _nav_btn_style(self, c: "ThemeColors | None" = None) -> str:
+        if c is None:
+            c = ThemeManager.instance().colors
+        return f"""
+QPushButton {{
+    background: {c.bg_hover};
+    border: 1px solid {c.border_base};
+    border-radius: 4px;
+    padding: 2px 10px;
+    font-size: 10px;
+    color: {c.text_secondary};
+    min-height: 20px;
+}}
+QPushButton:hover {{ background: {c.bg_card_hover}; }}
+QPushButton:pressed {{ background: {c.bg_alternate}; }}
+QPushButton:disabled {{ color: {c.text_muted}; }}
+"""
+
+    def _table_style(self) -> str:
+        c = ThemeManager.instance().colors
+        return f"""
+QTableWidget {{
+    background-color: {c.bg_panel};
+    alternate-background-color: {c.bg_alternate};
+    border: 1px solid {c.border_base};
+    border-radius: 10px;
+    gridline-color: {c.border_light};
+    outline: 0;
+    color: {c.text_primary};
+    selection-background-color: {c.selection_bg};
+    selection-color: {c.selection_text};
+}}
+QTableWidget::item {{ padding: 6px 8px; border: none; }}
+QHeaderView::section {{
+    background-color: {c.bg_header};
+    color: {c.text_secondary};
+    border: none;
+    border-bottom: 1px solid {c.border_base};
+    padding: 7px 8px;
+    font-size: 11px;
+    font-weight: 600;
+}}
+QScrollBar:vertical {{
+    background: {c.bg_scrollbar};
+    width: 6px;
+    border-radius: 3px;
+    margin: 6px 2px;
+}}
+QScrollBar::handle:vertical {{
+    background: {c.scrollbar_handle};
+    border-radius: 3px;
+    min-height: 24px;
+}}
+QScrollBar::handle:vertical:hover {{ background: {c.scrollbar_handle_hover}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
+"""
+
+    def apply_theme(self, c: ThemeColors) -> None:
+        """Применяет тему ко всем виджетам вкладки."""
+        # Кнопки-иконки верхней панели
+        update_icon_btn(self.load_btn, _SVG_REFRESH, icon_color=c.icon_color,
+                        bg=c.icon_btn_bg, hover=c.icon_btn_hover, pressed=c.icon_btn_pressed)
+        update_icon_btn(self.save_btn, _SVG_SAVE, icon_color=c.icon_color,
+                        bg=c.icon_btn_bg, hover=c.icon_btn_hover, pressed=c.icon_btn_pressed)
+        update_icon_btn(self.add_btn, _SVG_ADD, icon_color=c.icon_color,
+                        bg=c.icon_btn_bg, hover=c.icon_btn_hover, pressed=c.icon_btn_pressed)
+
+        # Подсказка
+        self._hint_label.setStyleSheet(
+            f"color: {c.text_muted}; font-style: italic; font-size: 11px;"
+        )
+
+        # Поле поиска
+        self._filter_edit.setStyleSheet(f"""
+QLineEdit {{
+    border: 1px solid {c.border_base};
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-size: 12px;
+    background: {c.bg_input};
+    color: {c.text_primary};
+}}
+QLineEdit:focus {{
+    border-color: {c.border_input_focus};
+    background: {c.bg_input_focus};
+}}
+""")
+
+        # Список проектов
+        self.list.setStyleSheet(f"""
+QListWidget {{
+    background-color: {c.bg_panel};
+    border: 1px solid {c.border_base};
+    border-radius: 12px;
+    outline: 0;
+    padding: 8px 7px;
+}}
+QListWidget::item {{
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin: 0 0 4px 0;
+}}
+QScrollBar:vertical {{
+    background: {c.bg_scrollbar};
+    width: 6px;
+    border-radius: 3px;
+    margin: 6px 2px 6px 2px;
+}}
+QScrollBar::handle:vertical {{
+    background: {c.scrollbar_handle};
+    border-radius: 3px;
+    min-height: 24px;
+}}
+QScrollBar::handle:vertical:hover {{ background: {c.scrollbar_handle_hover}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
+""")
+
+        # Обновляем делегат и перерисовываем список
+        self._delegate.set_colors(c)
+        self.list.viewport().update()
+
+        # Таблица реквизитов
+        self.table.setStyleSheet(self._table_style())
+
+        # Карточка: фон скролл-зоны и страницы
+        if hasattr(self, "_card_scroll"):
+            self._card_scroll.setStyleSheet(
+                f"QScrollArea, QScrollArea > QWidget > QWidget {{ background: {c.bg_window}; }}"
+            )
+        if hasattr(self, "_card_page"):
+            self._card_page.setStyleSheet(f"background: {c.bg_window};")
+
+        # Разделители и заголовки в карточке
+        if hasattr(self, "_card_title_sep"):
+            self._card_title_sep.setStyleSheet(f"color: {c.separator}; margin: 4px 0 2px 0;")
+        if hasattr(self, "_card_sep"):
+            self._card_sep.setStyleSheet(f"color: {c.separator}; margin: 2px 0;")
+        if hasattr(self, "_card_extras_label"):
+            self._card_extras_label.setStyleSheet(
+                f"color: {c.text_muted}; font-size: 10px; font-weight: 700;"
+            )
+
+        # Заголовок карточки
+        if hasattr(self, "_card_title_edit"):
+            self._card_title_edit.setStyleSheet(f"""
+QLineEdit {{
+    background: transparent;
+    border: none;
+    border-bottom: 1.5px solid {c.border_base};
+    border-radius: 0;
+    padding: 2px 2px 4px 2px;
+    font-size: 14px;
+    font-weight: 700;
+    color: {c.text_primary};
+}}
+QLineEdit:focus {{ border-bottom: 2px solid {c.border_input_focus}; }}
+QLineEdit:hover {{ border-bottom-color: {c.scrollbar_handle_hover}; }}
+""")
+
+        # Фиксированные поля карточки
+        fixed_style = f"""
+QLineEdit {{
+    background-color: {c.bg_input};
+    border: 1px solid {c.border_input};
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 12px;
+    color: {c.text_primary};
+}}
+QLineEdit:focus {{
+    border-color: {c.border_input_focus};
+    background-color: {c.bg_input_focus};
+}}
+"""
+        if hasattr(self, "_card_fixed_edits"):
+            for edit in self._card_fixed_edits.values():
+                edit.setStyleSheet(fixed_style)
+
+        # Кнопка добавления поля
+        if hasattr(self, "_card_add_field_btn"):
+            self._card_add_field_btn.setStyleSheet(f"""
+QPushButton {{
+    background: transparent;
+    color: {c.accent};
+    border: 1.5px dashed {c.border_input_focus};
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 12px;
+}}
+QPushButton:hover {{
+    background: {c.bg_card_hover};
+    border-color: {c.accent};
+}}
+QPushButton:pressed {{ background: {c.bg_hover}; }}
+""")
+
+        # Пользовательские поля карточки (динамически создаются)
+        textedit_style = f"""
+QTextEdit {{
+    background-color: {c.bg_input};
+    border: 1px solid {c.border_input};
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 12px;
+    color: {c.text_primary};
+    selection-background-color: {c.selection_bg};
+}}
+QTextEdit:focus {{
+    border-color: {c.border_input_focus};
+    background-color: {c.bg_input_focus};
+}}
+"""
+        if hasattr(self, "_card_custom_rows"):
+            for _, name_edit, value_edit in self._card_custom_rows:
+                name_edit.setStyleSheet(f"""
+QLineEdit {{
+    color: {c.text_secondary};
+    font-size: 11px;
+    font-weight: 600;
+    background: {c.bg_input};
+    border: 1px solid {c.border_input};
+    border-radius: 4px;
+    padding: 1px 6px;
+    min-height: 22px;
+}}
+QLineEdit:focus {{
+    color: {c.text_accent};
+    border-color: {c.border_input_focus};
+    background-color: {c.bg_input_focus};
+}}
+""")
+                value_edit.setStyleSheet(textedit_style)
+
+        # Drop-зона документов
+        if hasattr(self, "_docs_drop_zone"):
+            self._docs_drop_zone.apply_theme(c)
+
+        # Строка папки документов
+        if hasattr(self, "_docs_folder_row"):
+            self._docs_folder_row.apply_theme(c)
+            self._docs_path_edit.setStyleSheet(f"""
+QLineEdit {{
+    background-color: {c.bg_input};
+    border: 1px solid {c.border_input};
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 12px;
+    color: {c.text_primary};
+}}
+QLineEdit:focus {{
+    border-color: {c.border_input_focus};
+    background-color: {c.bg_input_focus};
+}}
+""")
+            self._docs_folder_row._browse_btn.setStyleSheet(f"""
+QPushButton {{
+    background: {c.bg_hover};
+    border: 1px solid {c.border_base};
+    border-radius: 4px;
+    padding: 2px 10px;
+    font-size: 11px;
+    color: {c.text_secondary};
+    min-height: 22px;
+}}
+QPushButton:hover {{ background: {c.bg_card_hover}; }}
+QPushButton:pressed {{ background: {c.bg_alternate}; }}
+""")
+            update_icon_btn(
+                self._docs_open_folder_btn, _SVG_FOLDER,
+                icon_color="#ffffff", bg=c.accent, hover=c.accent_hover, pressed=c.accent_pressed
+            )
+
+        # Список файлов в документах
+        if hasattr(self, "_docs_list"):
+            self._docs_list.setStyleSheet(self._docs_list_style())
+
+        # Заголовки панели документов
+        if hasattr(self, "_docs_files_label"):
+            self._docs_files_label.setStyleSheet(
+                f"color: {c.text_muted}; font-size: 10px; font-weight: 700; letter-spacing: 0.3px;"
+            )
+        if hasattr(self, "_docs_hint_label"):
+            self._docs_hint_label.setStyleSheet(
+                f"color: {c.text_muted}; font-size: 10px; font-style: italic;"
+            )
+
+        # Панель предпросмотра
+        if hasattr(self, "_preview_scroll"):
+            self._preview_scroll.setStyleSheet(self._preview_scroll_style(c))
+        if hasattr(self, "_preview_label"):
+            self._preview_label.setStyleSheet(
+                f"background: transparent; color: {c.text_muted}; font-size: 12px; padding: 40px;"
+            )
+        if hasattr(self, "_preview_name_label"):
+            self._preview_name_label.setStyleSheet(
+                f"color: {c.text_secondary}; font-size: 11px; font-weight: 600;"
+            )
+        if hasattr(self, "_preview_rename_edit"):
+            self._preview_rename_edit.setStyleSheet(f"""
+QLineEdit {{
+    background-color: {c.bg_input};
+    border: 1px solid {c.border_input};
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 12px;
+    color: {c.text_primary};
+}}
+QLineEdit:focus {{
+    border-color: {c.border_input_focus};
+    background-color: {c.bg_input_focus};
+}}
+""")
+        if hasattr(self, "_preview_rename_btn"):
+            self._preview_rename_btn.setStyleSheet(self._rename_btn_style(c))
+        if hasattr(self, "_preview_prev_btn"):
+            self._preview_prev_btn.setStyleSheet(self._nav_btn_style(c))
+        if hasattr(self, "_preview_next_btn"):
+            self._preview_next_btn.setStyleSheet(self._nav_btn_style(c))
+        if hasattr(self, "_preview_page_label"):
+            self._preview_page_label.setStyleSheet(
+                f"color: {c.text_secondary}; font-size: 10px; min-width: 100px;"
+            )
+
     # ── Построение вкладки «Карточка» ────────────────────────────────────────
 
     def _build_card_tab(self) -> QWidget:
@@ -1014,7 +1524,9 @@ QLineEdit:focus {
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: #f4f6f9; }")
+        c0 = ThemeManager.instance().colors
+        scroll.setStyleSheet(f"QScrollArea, QScrollArea > QWidget > QWidget {{ background: {c0.bg_window}; }}")
+        self._card_scroll = scroll
 
         content = QWidget()
         content.setMaximumWidth(600)
@@ -1045,7 +1557,9 @@ QLineEdit:focus {
 
         title_sep = QFrame()
         title_sep.setFrameShape(QFrame.Shape.HLine)
-        title_sep.setStyleSheet("color: #dde2ea; margin: 4px 0 2px 0;")
+        c0 = ThemeManager.instance().colors
+        title_sep.setStyleSheet(f"color: {c0.separator}; margin: 4px 0 2px 0;")
+        self._card_title_sep = title_sep
         self._card_content_vbox.addWidget(self._card_title_edit)
         self._card_content_vbox.addWidget(title_sep)
 
@@ -1095,13 +1609,15 @@ QLineEdit:focus {
         # Разделитель
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet("color: #dde2ea; margin: 2px 0;")
+        sep.setStyleSheet(f"color: {c0.separator}; margin: 2px 0;")
+        self._card_sep = sep
         self._card_content_vbox.addWidget(sep)
 
         # Заголовок секции доп. полей
         extras_header = QHBoxLayout()
         extras_label = QLabel("Дополнительные поля")
-        extras_label.setStyleSheet("color: #6b7a8d; font-size: 10px; font-weight: 700;")
+        extras_label.setStyleSheet(f"color: {c0.text_muted}; font-size: 10px; font-weight: 700;")
+        self._card_extras_label = extras_label
         extras_header.addWidget(extras_label)
         extras_header.addStretch()
         self._card_content_vbox.addLayout(extras_header)
@@ -1130,7 +1646,8 @@ QLineEdit:focus {
         # Оборачиваем content в страничный виджет: content + stretch справа.
         # Это гарантирует, что контент не растягивается на всю ширину окна.
         page = QWidget()
-        page.setStyleSheet("background: #f4f6f9;")
+        page.setStyleSheet(f"background: {c0.bg_window};")
+        self._card_page = page
         page_hbox = QHBoxLayout(page)
         page_hbox.setContentsMargins(0, 0, 0, 0)
         page_hbox.setSpacing(0)
@@ -1178,6 +1695,7 @@ QLineEdit:focus {
     def _make_custom_field_row(
         self, name: str = "", value: str = ""
     ) -> tuple[QWidget, QLineEdit, _AutoResizeTextEdit]:
+        c = ThemeManager.instance().colors
         row = QWidget()
         row.setStyleSheet("background: transparent;")
         row.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
@@ -1196,7 +1714,23 @@ QLineEdit:focus {
 
         name_edit = QLineEdit(name)
         name_edit.setPlaceholderText("Название поля")
-        name_edit.setStyleSheet(_CUSTOM_NAME_EDIT_STYLE)
+        name_edit.setStyleSheet(f"""
+QLineEdit {{
+    color: {c.text_secondary};
+    font-size: 11px;
+    font-weight: 600;
+    background: {c.bg_input};
+    border: 1px solid {c.border_input};
+    border-radius: 4px;
+    padding: 1px 6px;
+    min-height: 22px;
+}}
+QLineEdit:focus {{
+    color: {c.text_accent};
+    border-color: {c.border_input_focus};
+    background-color: {c.bg_input_focus};
+}}
+""")
 
         up_btn = _mini_btn("↑", "Переместить вверх")
         down_btn = _mini_btn("↓", "Переместить вниз")
@@ -1479,17 +2013,18 @@ QLineEdit:focus {
         if event.mimeData().hasUrls() and any(
             u.toLocalFile().lower().endswith(".json") for u in event.mimeData().urls()
         ):
-            self.table.setStyleSheet(_DROP_ACTIVE_STYLE)
+            c = ThemeManager.instance().colors
+            self.table.setStyleSheet(f"QTableWidget {{ border: 2px dashed {c.accent}; border-radius: 4px; }}")
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragLeaveEvent(self, event) -> None:  # noqa: ANN001
-        self.table.setStyleSheet("")
+        self.table.setStyleSheet(self._table_style())
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event: QDropEvent) -> None:
-        self.table.setStyleSheet("")
+        self.table.setStyleSheet(self._table_style())
         for url in event.mimeData().urls():
             path = url.toLocalFile()
             if path.lower().endswith(".json"):
@@ -2122,43 +2657,51 @@ QLineEdit:focus {
         vbox.setContentsMargins(10, 8, 10, 8)
         vbox.setSpacing(6)
 
-        # Строка выбора папки
-        path_row = QHBoxLayout()
-        path_row.setSpacing(6)
-        path_label = QLabel("Папка:")
-        path_label.setStyleSheet(
-            "color: #5b6a7a; font-size: 11px; font-weight: 600; min-width: 42px;"
-        )
+        # Строка выбора папки (скрыта до наведения курсора)
+        c0 = ThemeManager.instance().colors
         self._docs_path_edit = _PathLineEdit()
         self._docs_path_edit.setPlaceholderText("Путь к папке документов для этого проекта…")
-        self._docs_path_edit.setStyleSheet(_FIXED_VALUE_STYLE)
+        self._docs_path_edit.setStyleSheet(f"""
+QLineEdit {{
+    background-color: {c0.bg_input};
+    border: 1px solid {c0.border_input};
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 12px;
+    color: {c0.text_primary};
+}}
+QLineEdit:focus {{
+    border-color: {c0.border_input_focus};
+    background-color: {c0.bg_input_focus};
+}}
+""")
 
         browse_docs_btn = QPushButton("Выбрать…")
-        browse_docs_btn.setStyleSheet("""
-QPushButton {
-    background: #f0f4f8;
-    border: 1px solid #c5d0dc;
+        browse_docs_btn.setStyleSheet(f"""
+QPushButton {{
+    background: {c0.bg_hover};
+    border: 1px solid {c0.border_base};
     border-radius: 4px;
     padding: 2px 10px;
     font-size: 11px;
-    color: #3a5a78;
+    color: {c0.text_secondary};
     min-height: 22px;
-}
-QPushButton:hover { background: #e0eaf4; }
-QPushButton:pressed { background: #d0dce8; }
+}}
+QPushButton:hover {{ background: {c0.bg_card_hover}; }}
+QPushButton:pressed {{ background: {c0.bg_alternate}; }}
 """)
         browse_docs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
         open_folder_btn = _icon_btn(
             _SVG_FOLDER, "Открыть папку в проводнике",
-            "#ffffff", "#5b9bd5", "#4a7ec0", "#3a6aaa",
+            "#ffffff", c0.accent, c0.accent_hover, c0.accent_pressed,
         )
+        self._docs_open_folder_btn = open_folder_btn
 
-        path_row.addWidget(path_label)
-        path_row.addWidget(self._docs_path_edit, 1)
-        path_row.addWidget(browse_docs_btn)
-        path_row.addWidget(open_folder_btn)
-        vbox.addLayout(path_row)
+        self._docs_folder_row = _DocsFolderRow(
+            self._docs_path_edit, browse_docs_btn, open_folder_btn
+        )
+        vbox.addWidget(self._docs_folder_row)
 
         # Зона перетаскивания
         self._docs_drop_zone = _DropZone()
@@ -2179,10 +2722,12 @@ QPushButton:pressed { background: #d0dce8; }
         files_header = QHBoxLayout()
         files_label = QLabel("Файлы в папке")
         files_label.setStyleSheet(
-            "color: #6b7a8d; font-size: 10px; font-weight: 700; letter-spacing: 0.3px;"
+            f"color: {c0.text_muted}; font-size: 10px; font-weight: 700; letter-spacing: 0.3px;"
         )
+        self._docs_files_label = files_label
         hint_label = QLabel("двойной клик — переименовать")
-        hint_label.setStyleSheet("color: #aab5c2; font-size: 10px; font-style: italic;")
+        hint_label.setStyleSheet(f"color: {c0.text_muted}; font-size: 10px; font-style: italic;")
+        self._docs_hint_label = hint_label
         refresh_docs_btn = _mini_btn("↻", "Обновить список файлов")
         files_header.addWidget(files_label)
         files_header.addWidget(hint_label)
@@ -2191,40 +2736,7 @@ QPushButton:pressed { background: #d0dce8; }
         left_vbox.addLayout(files_header)
 
         self._docs_list = QListWidget()
-        self._docs_list.setStyleSheet("""
-QListWidget {
-    background-color: #ffffff;
-    border: 1px solid #dde2ea;
-    border-radius: 6px;
-    padding: 3px;
-    font-size: 12px;
-    outline: 0;
-}
-QListWidget::item {
-    padding: 4px 8px;
-    border-radius: 3px;
-}
-QListWidget::item:selected {
-    background: #deeaff;
-    color: #1a3a6b;
-}
-QListWidget::item:hover {
-    background: #f0f5fb;
-}
-QScrollBar:vertical {
-    background: #f4f6f9;
-    width: 6px;
-    border-radius: 3px;
-    margin: 4px 2px;
-}
-QScrollBar::handle:vertical {
-    background: #c0cad6;
-    border-radius: 3px;
-    min-height: 24px;
-}
-QScrollBar::handle:vertical:hover { background: #8A9BB0; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-""")
+        self._docs_list.setStyleSheet(self._docs_list_style())
         self._docs_list.setEditTriggers(
             QAbstractItemView.EditTrigger.DoubleClicked
             | QAbstractItemView.EditTrigger.SelectedClicked
@@ -2243,9 +2755,12 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
         vbox.addWidget(docs_splitter, 1)
 
         # Подключаем сигналы
-        browse_docs_btn.clicked.connect(self._browse_docs_dir)
-        open_folder_btn.clicked.connect(self._open_docs_folder)
+        self._docs_folder_row._browse_btn.clicked.connect(self._browse_docs_dir)
+        self._docs_open_folder_btn.clicked.connect(self._open_docs_folder)
         self._docs_path_edit.editingFinished.connect(self._on_docs_path_changed)
+        self._docs_path_edit.editingFinished.connect(
+            self._docs_folder_row._on_path_focus_lost
+        )
         self._docs_list.itemChanged.connect(self._on_doc_renamed)
         self._docs_list.currentItemChanged.connect(self._on_doc_selected)
         refresh_docs_btn.clicked.connect(self._refresh_docs_list)
@@ -2343,34 +2858,35 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
         vbox = QVBoxLayout(panel)
         vbox.setContentsMargins(4, 0, 0, 0)
         vbox.setSpacing(4)
+        c0 = ThemeManager.instance().colors
 
         # Строка переименования
         rename_row = QHBoxLayout()
         rename_row.setSpacing(4)
         name_label = QLabel("Имя:")
         name_label.setStyleSheet(
-            "color: #5b6a7a; font-size: 11px; font-weight: 600;"
+            f"color: {c0.text_secondary}; font-size: 11px; font-weight: 600;"
         )
+        self._preview_name_label = name_label
         self._preview_rename_edit = QLineEdit()
         self._preview_rename_edit.setPlaceholderText("Выберите файл…")
-        self._preview_rename_edit.setStyleSheet(_FIXED_VALUE_STYLE)
+        self._preview_rename_edit.setStyleSheet(f"""
+QLineEdit {{
+    background-color: {c0.bg_input};
+    border: 1px solid {c0.border_input};
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 12px;
+    color: {c0.text_primary};
+}}
+QLineEdit:focus {{
+    border-color: {c0.border_input_focus};
+    background-color: {c0.bg_input_focus};
+}}
+""")
 
         self._preview_rename_btn = QPushButton("Переименовать")
-        self._preview_rename_btn.setStyleSheet("""
-QPushButton {
-    background: #5b9bd5;
-    border: none;
-    border-radius: 4px;
-    padding: 2px 12px;
-    font-size: 11px;
-    font-weight: 600;
-    color: #ffffff;
-    min-height: 22px;
-}
-QPushButton:hover { background: #4a8ac4; }
-QPushButton:pressed { background: #3a7ab4; }
-QPushButton:disabled { background: #c5d0dc; color: #8a9aaa; }
-""")
+        self._preview_rename_btn.setStyleSheet(self._rename_btn_style(c0))
         self._preview_rename_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._preview_rename_btn.setEnabled(False)
 
@@ -2383,33 +2899,14 @@ QPushButton:disabled { background: #c5d0dc; color: #8a9aaa; }
         self._preview_scroll = QScrollArea()
         self._preview_scroll.setWidgetResizable(True)
         self._preview_scroll.setFrameShape(QFrame.Shape.StyledPanel)
-        self._preview_scroll.setStyleSheet("""
-QScrollArea {
-    background: #fafbfc;
-    border: 1px solid #dde2ea;
-    border-radius: 6px;
-}
-QScrollBar:vertical {
-    background: #f4f6f9;
-    width: 6px;
-    border-radius: 3px;
-    margin: 4px 2px;
-}
-QScrollBar::handle:vertical {
-    background: #c0cad6;
-    border-radius: 3px;
-    min-height: 24px;
-}
-QScrollBar::handle:vertical:hover { background: #8A9BB0; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-""")
+        self._preview_scroll.setStyleSheet(self._preview_scroll_style(c0))
 
         self._preview_label = QLabel("Выберите файл\nдля предпросмотра")
         self._preview_label.setAlignment(
             Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter
         )
         self._preview_label.setStyleSheet(
-            "background: transparent; color: #8a9aaa; font-size: 12px; padding: 40px;"
+            f"background: transparent; color: {c0.text_muted}; font-size: 12px; padding: 40px;"
         )
         self._preview_label.setWordWrap(True)
         self._preview_scroll.setWidget(self._preview_label)
@@ -2423,20 +2920,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
 
         self._preview_prev_btn = QPushButton("← Пред.")
         self._preview_next_btn = QPushButton("След. →")
-        _nav_btn_css = """
-QPushButton {
-    background: #f0f4f8;
-    border: 1px solid #c5d0dc;
-    border-radius: 4px;
-    padding: 2px 10px;
-    font-size: 10px;
-    color: #3a5a78;
-    min-height: 20px;
-}
-QPushButton:hover { background: #e0eaf4; }
-QPushButton:pressed { background: #d0dce8; }
-QPushButton:disabled { color: #b0bcc8; }
-"""
+        _nav_btn_css = self._nav_btn_style(c0)
         self._preview_prev_btn.setStyleSheet(_nav_btn_css)
         self._preview_next_btn.setStyleSheet(_nav_btn_css)
         self._preview_prev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2445,7 +2929,7 @@ QPushButton:disabled { color: #b0bcc8; }
         self._preview_page_label = QLabel("")
         self._preview_page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_page_label.setStyleSheet(
-            "color: #5b6a7a; font-size: 10px; min-width: 100px;"
+            f"color: {c0.text_secondary}; font-size: 10px; min-width: 100px;"
         )
 
         nav_h.addStretch()
