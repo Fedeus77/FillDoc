@@ -288,10 +288,13 @@ class SettingsTab(QWidget):
         self._toggle.set_dark(is_dark)
         self._theme_status.setText("Тёмная" if is_dark else "Светлая")
 
+        neon_border = c.border_input_focus if c.name == "dark" else c.accent
+        neon_soft_bg = "#1b2838" if c.name == "dark" else "#eef6ff"
+
         self.setStyleSheet(f"""
 QWidget#settings_card {{
     background-color: {c.bg_panel};
-    border: 1px solid {c.border_base};
+    border: 1px solid {neon_border};
     border-radius: 10px;
 }}
 QLabel#settings_title {{
@@ -301,7 +304,7 @@ QLabel#settings_title {{
     background: transparent;
 }}
 QLabel#settings_section_label {{
-    color: {c.text_muted};
+    color: {c.text_accent};
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.8px;
@@ -314,47 +317,66 @@ QLabel#settings_row_label {{
     background: transparent;
 }}
 QLabel#settings_row_hint {{
-    color: {c.text_muted};
+    color: {c.text_secondary};
     font-size: 12px;
     background: transparent;
+}}
+QLineEdit {{
+    background-color: {c.bg_input};
+    color: {c.text_primary};
+    border: 1px solid {c.border_input};
+    border-radius: 7px;
+    padding: 7px 10px;
+    font-size: 12px;
+}}
+QLineEdit:hover {{
+    border-color: {neon_border};
+}}
+QLineEdit:focus {{
+    background-color: {c.bg_input_focus};
+    border: 1px solid {neon_border};
 }}
 QPushButton#settings_primary_btn {{
     background-color: {c.accent};
     color: {c.accent_text};
-    border: none;
-    border-radius: 6px;
+    border: 1px solid {neon_border};
+    border-radius: 8px;
     padding: 8px 20px;
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 700;
 }}
 QPushButton#settings_primary_btn:hover {{
     background-color: {c.accent_hover};
+    border-color: {c.text_accent};
 }}
 QPushButton#settings_primary_btn:pressed {{
     background-color: {c.accent_pressed};
 }}
 QPushButton#settings_secondary_btn {{
-    background-color: {c.bg_hover};
+    background-color: {neon_soft_bg};
     color: {c.text_primary};
-    border: 1px solid {c.border_base};
-    border-radius: 6px;
+    border: 1px solid {neon_border};
+    border-radius: 8px;
     padding: 8px 20px;
     font-size: 13px;
+    font-weight: 600;
 }}
 QPushButton#settings_secondary_btn:hover {{
     background-color: {c.bg_card_hover};
-    border-color: {c.border_input_focus};
+    border-color: {c.text_accent};
 }}
 QPushButton#settings_browse_btn {{
-    background-color: {c.bg_hover};
+    background-color: {neon_soft_bg};
     color: {c.text_secondary};
-    border: 1px solid {c.border_base};
-    border-radius: 5px;
+    border: 1px solid {neon_border};
+    border-radius: 7px;
     padding: 5px 10px;
     font-size: 12px;
+    font-weight: 600;
 }}
 QPushButton#settings_browse_btn:hover {{
     background-color: {c.bg_card_hover};
     color: {c.text_primary};
+    border-color: {c.text_accent};
 }}
 """)

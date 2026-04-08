@@ -50,10 +50,40 @@ from filldoc.ui.icons import make_icon as _icons_make_icon, SVG_REFRESH, SVG_SAV
 from filldoc.ui.theme import ThemeColors, ThemeManager
 
 PROJECT_NAME_FIELD = "Имя проекта"
+PROJECT_TYPE_FIELD = "Тип проекта"
+PROJECT_COMMENT_FIELD = "Комментарий"
 
 _DROP_ACTIVE_STYLE = "QTableWidget { border: 2px dashed #4A90D9; border-radius: 4px; }"
 
+# ── Typography: project names ────────────────────────────────────────────────
+# A modern, even, Windows-friendly sans stack with tighter width.
+_PROJECT_NAME_FONT_FAMILIES: list[str] = [
+    "Segoe UI Variable Text",
+    "Segoe UI Variable Display",
+    "Segoe UI",
+    "Inter",
+    "Bahnschrift",
+]
+_PROJECT_NAME_FONT_PT = 10.2 * 0.9  # -10%
+_PROJECT_NAME_FONT_STRETCH = 95     # narrower width (100 = normal)
+_PROJECT_NAME_LETTER_SPACING_PCT = 100.0
+
+
+def _project_name_font(*, base: QFont | None = None, is_selected: bool = False) -> QFont:
+    font = QFont(base) if base is not None else QFont()
+    # Prefer a modern, even UI font if available; Qt will pick the first installed.
+    if hasattr(font, "setFamilies"):
+        font.setFamilies(_PROJECT_NAME_FONT_FAMILIES)
+    else:
+        font.setFamily(_PROJECT_NAME_FONT_FAMILIES[0])
+    font.setPointSizeF(_PROJECT_NAME_FONT_PT)
+    font.setStretch(_PROJECT_NAME_FONT_STRETCH)
+    font.setWeight(QFont.Weight.DemiBold if is_selected else QFont.Weight.Medium)
+    font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, _PROJECT_NAME_LETTER_SPACING_PCT)
+    return font
+
 _CARD_FIXED_FIELDS = [
+    PROJECT_TYPE_FIELD,
     "ИНН кредитора",
     "ИНН должника",
     "Номер осн. дела",
@@ -62,6 +92,9 @@ _CARD_FIXED_FIELDS = [
     "Дата листа",
     "Номер ИП",
     "Дата ИП",
+    "Сумма долга всего",
+    "Сумма осн. долга",
+    PROJECT_COMMENT_FIELD,
 ]
 
 # Поля карточки, у которых есть отдельное поле для хранения ссылки.
@@ -511,11 +544,7 @@ class _ProjectItemDelegate(QStyledItemDelegate):
         else:
             text_color = QColor(c.text_primary)
 
-        font = QFont(option.font)
-        font.setFamily("Bahnschrift")
-        font.setPointSizeF(10.2)
-        font.setWeight(QFont.Weight.DemiBold if is_selected else QFont.Weight.Medium)
-        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 102.0)
+        font = _project_name_font(base=option.font, is_selected=is_selected)
         painter.setFont(font)
         painter.setPen(text_color)
 
@@ -560,11 +589,7 @@ class _NameOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         self._label = QLabel()
-        _f = QFont("Bahnschrift")
-        _f.setPointSizeF(10.2)
-        _f.setWeight(QFont.Weight.Medium)
-        _f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 102.0)
-        self._label.setFont(_f)
+        self._label.setFont(_project_name_font(is_selected=False))
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(self._PAD_L, 0, self._PAD_R, 0)
@@ -618,8 +643,8 @@ class _ProjectListWidget(QListWidget):
     json_dropped = Signal(str, int)
 
     # Параметры шрифта делегата (для измерения ширины текста)
-    _FONT_FAMILY = "Bahnschrift"
-    _FONT_PT = 10.2
+    _FONT_FAMILIES = _PROJECT_NAME_FONT_FAMILIES
+    _FONT_PT = _PROJECT_NAME_FONT_PT
     _TEXT_MARGINS = 34  # 20 left + 14 right (в делегате)
 
     def __init__(self, parent=None) -> None:
@@ -632,10 +657,7 @@ class _ProjectListWidget(QListWidget):
         self._hover_timer.timeout.connect(self._commit_overlay)
 
     def _text_fits(self, item: QListWidgetItem) -> bool:
-        font = QFont(self._FONT_FAMILY)
-        font.setPointSizeF(self._FONT_PT)
-        font.setWeight(QFont.Weight.Medium)
-        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 102.0)
+        font = _project_name_font(is_selected=False)
         available = self.viewport().width() - self._TEXT_MARGINS
         return QFontMetrics(font).horizontalAdvance(item.text()) <= available
 
@@ -983,7 +1005,6 @@ class ProjectsTab(QWidget):
         self._archived_projects: list[Project] = []
         self._current: Project | None = None
         self._showing_archive: bool = False
-        self._card_custom_keys: dict[str, list[str]] = {}
         self._current_tab_index: int = 0
         self._card_field_col_width: int = _CARD_FIELD_COL_DEFAULT_W
         self._card_content_widget: QWidget | None = None
@@ -1325,12 +1346,6 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none
         # Разделители и заголовки в карточке
         if hasattr(self, "_card_title_sep"):
             self._card_title_sep.setStyleSheet(f"color: {c.separator}; margin: 4px 0 2px 0;")
-        if hasattr(self, "_card_sep"):
-            self._card_sep.setStyleSheet(f"color: {c.separator}; margin: 2px 0;")
-        if hasattr(self, "_card_extras_label"):
-            self._card_extras_label.setStyleSheet(
-                f"color: {c.text_muted}; font-size: 10px; font-weight: 700;"
-            )
 
         # Заголовок карточки
         if hasattr(self, "_card_title_edit"):
@@ -1368,26 +1383,6 @@ QLineEdit:focus {{
             for edit in self._card_fixed_edits.values():
                 edit.setStyleSheet(fixed_style)
 
-        # Кнопка добавления поля
-        if hasattr(self, "_card_add_field_btn"):
-            self._card_add_field_btn.setStyleSheet(f"""
-QPushButton {{
-    background: transparent;
-    color: {c.accent};
-    border: 1.5px dashed {c.border_input_focus};
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 4px 12px;
-}}
-QPushButton:hover {{
-    background: {c.bg_card_hover};
-    border-color: {c.accent};
-}}
-QPushButton:pressed {{ background: {c.bg_hover}; }}
-""")
-
-        # Пользовательские поля карточки (динамически создаются)
         textedit_style = f"""
 QTextEdit {{
     background-color: {c.bg_input};
@@ -1403,26 +1398,10 @@ QTextEdit:focus {{
     background-color: {c.bg_input_focus};
 }}
 """
-        if hasattr(self, "_card_custom_rows"):
-            for _, name_edit, value_edit in self._card_custom_rows:
-                name_edit.setStyleSheet(f"""
-QLineEdit {{
-    color: {c.text_secondary};
-    font-size: 11px;
-    font-weight: 600;
-    background: {c.bg_input};
-    border: 1px solid {c.border_input};
-    border-radius: 4px;
-    padding: 1px 6px;
-    min-height: 22px;
-}}
-QLineEdit:focus {{
-    color: {c.text_accent};
-    border-color: {c.border_input_focus};
-    background-color: {c.bg_input_focus};
-}}
-""")
-                value_edit.setStyleSheet(textedit_style)
+        if hasattr(self, "_card_fixed_edit_widgets") and PROJECT_COMMENT_FIELD in self._card_fixed_edit_widgets:
+            comment_edit = self._card_fixed_edit_widgets[PROJECT_COMMENT_FIELD]
+            if isinstance(comment_edit, _AutoResizeTextEdit):
+                comment_edit.setStyleSheet(textedit_style)
 
         # Drop-зона документов
         if hasattr(self, "_docs_drop_zone"):
@@ -1535,6 +1514,7 @@ QLineEdit:focus {{
         self._card_content_vbox.setContentsMargins(12, 8, 12, 8)
         self._card_content_vbox.setSpacing(5)
         self._card_left_col_widgets: list[QWidget] = []
+        self._card_fixed_edit_widgets: dict[str, QWidget] = {}
 
         # ── Поле «Имя проекта» — заголовок карточки ──────────────────────
         self._card_title_edit = QLineEdit()
@@ -1596,7 +1576,8 @@ QLineEdit:focus {{
         self._register_card_left_widget(left_col_header)
 
         # Фиксированные поля
-        self._card_fixed_edits: dict[str, QLineEdit] = {}
+        self._card_fixed_edits: dict[str, QWidget] = {}
+        self._card_fixed_rows: dict[str, QWidget] = {}
         self._card_link_btns: list[tuple[QToolButton, str]] = []
         for field_name in _CARD_FIXED_FIELDS:
             fw, edit = self._make_fixed_field_row(
@@ -1604,42 +1585,13 @@ QLineEdit:focus {{
                 link_field_name=_CARD_LINK_FIELDS.get(field_name),
             )
             self._card_fixed_edits[field_name] = edit
+            self._card_fixed_edit_widgets[field_name] = edit
+            self._card_fixed_rows[field_name] = fw
             self._card_content_vbox.addWidget(fw)
 
-        # Разделитель
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {c0.separator}; margin: 2px 0;")
-        self._card_sep = sep
-        self._card_content_vbox.addWidget(sep)
-
-        # Заголовок секции доп. полей
-        extras_header = QHBoxLayout()
-        extras_label = QLabel("Дополнительные поля")
-        extras_label.setStyleSheet(f"color: {c0.text_muted}; font-size: 10px; font-weight: 700;")
-        self._card_extras_label = extras_label
-        extras_header.addWidget(extras_label)
-        extras_header.addStretch()
-        self._card_content_vbox.addLayout(extras_header)
-
-        # Контейнер для доп. полей
-        self._card_extras_container = QWidget()
-        self._card_extras_container.setStyleSheet("background: transparent;")
-        self._card_extras_vbox = QVBoxLayout(self._card_extras_container)
-        self._card_extras_vbox.setContentsMargins(0, 0, 0, 0)
-        self._card_extras_vbox.setSpacing(2)
-        self._card_extras_vbox.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._card_content_vbox.addWidget(self._card_extras_container)
-
-        # Кнопка добавления поля
-        add_btn_row = QHBoxLayout()
-        self._card_add_field_btn = QPushButton("+ Добавить поле")
-        self._card_add_field_btn.setStyleSheet(_ADD_FIELD_BTN_STYLE)
-        self._card_add_field_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._card_add_field_btn.clicked.connect(self._add_card_field)
-        add_btn_row.addWidget(self._card_add_field_btn)
-        add_btn_row.addStretch()
-        self._card_content_vbox.addLayout(add_btn_row)
+        self._card_fields_end_anchor = QWidget()
+        self._card_fields_end_anchor.setVisible(False)
+        self._card_content_vbox.addWidget(self._card_fields_end_anchor)
 
         self._card_content_vbox.addStretch()
 
@@ -1656,7 +1608,6 @@ QLineEdit:focus {{
         scroll.setWidget(page)
         outer.addWidget(scroll)
 
-        self._card_custom_rows: list[tuple[QWidget, QLineEdit, _AutoResizeTextEdit]] = []
         self._set_card_field_col_width(self._card_field_col_width)
         return wrapper
 
@@ -1666,7 +1617,7 @@ QLineEdit:focus {{
         *,
         label_text: str | None = None,
         link_field_name: str | None = None,
-    ) -> tuple[QWidget, QLineEdit]:
+    ) -> tuple[QWidget, QWidget]:
         row = QWidget()
         row.setStyleSheet("background: transparent;")
         hbox = QHBoxLayout(row)
@@ -1677,92 +1628,27 @@ QLineEdit:focus {{
         label.setStyleSheet(_CARD_LABEL_CSS)
         self._register_card_left_widget(label)
 
-        edit = QLineEdit()
-        edit.setPlaceholderText("—")
-        edit.setStyleSheet(_FIXED_VALUE_STYLE)
-        edit.setFixedHeight(22)
-        edit.editingFinished.connect(self._schedule_autosave)
+        if field_name == PROJECT_COMMENT_FIELD:
+            edit = _AutoResizeTextEdit(placeholder="—")
+            edit.setMinimumHeight(22)
+            edit.textChanged.connect(self._reorder_card_fixed_rows)
+            edit.textChanged.connect(self._schedule_autosave)
+        else:
+            edit = QLineEdit()
+            edit.setPlaceholderText("—")
+            edit.setStyleSheet(_FIXED_VALUE_STYLE)
+            edit.setFixedHeight(22)
+            edit.textChanged.connect(lambda _text, self=self: self._reorder_card_fixed_rows())
+            edit.editingFinished.connect(self._schedule_autosave)
 
         hbox.addWidget(label)
         hbox.addWidget(edit, 1)
-        if link_field_name:
+        if link_field_name and isinstance(edit, QLineEdit):
             lb = _link_btn()
             hbox.addWidget(lb)
             self._wire_link_for_fixed_field(edit, lb, link_field_name)
             self._card_link_btns.append((lb, link_field_name))
         return row, edit
-
-    def _make_custom_field_row(
-        self, name: str = "", value: str = ""
-    ) -> tuple[QWidget, QLineEdit, _AutoResizeTextEdit]:
-        c = ThemeManager.instance().colors
-        row = QWidget()
-        row.setStyleSheet("background: transparent;")
-        row.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        hbox = QHBoxLayout(row)
-        hbox.setContentsMargins(0, 0, 0, 0)
-        hbox.setSpacing(_CARD_COL_GAP)
-        hbox.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        field_cell = QWidget()
-        field_cell_h = QHBoxLayout(field_cell)
-        field_cell_h.setSpacing(1)
-        field_cell_h.setContentsMargins(0, 0, 0, 0)
-        field_cell_h.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._register_card_left_widget(field_cell)
-        row.setProperty("_left_col_widget", field_cell)
-
-        name_edit = QLineEdit(name)
-        name_edit.setPlaceholderText("Название поля")
-        name_edit.setStyleSheet(f"""
-QLineEdit {{
-    color: {c.text_secondary};
-    font-size: 11px;
-    font-weight: 600;
-    background: {c.bg_input};
-    border: 1px solid {c.border_input};
-    border-radius: 4px;
-    padding: 1px 6px;
-    min-height: 22px;
-}}
-QLineEdit:focus {{
-    color: {c.text_accent};
-    border-color: {c.border_input_focus};
-    background-color: {c.bg_input_focus};
-}}
-""")
-
-        up_btn = _mini_btn("↑", "Переместить вверх")
-        down_btn = _mini_btn("↓", "Переместить вниз")
-        del_btn = _mini_btn("×", "Удалить поле", _MINI_DEL_BTN_STYLE)
-
-        field_cell_h.addWidget(name_edit, 1)
-
-        value_edit = _AutoResizeTextEdit(placeholder="—")
-        if value:
-            value_edit.setPlainText(value)
-
-        controls_cell = QWidget()
-        controls_h = QHBoxLayout(controls_cell)
-        controls_h.setContentsMargins(1, 0, 0, 0)
-        controls_h.setSpacing(1)
-        controls_h.setAlignment(Qt.AlignmentFlag.AlignTop)
-        controls_h.addWidget(up_btn)
-        controls_h.addWidget(down_btn)
-        controls_h.addWidget(del_btn)
-
-        hbox.addWidget(field_cell)
-        hbox.addWidget(value_edit, 1)
-        hbox.addWidget(controls_cell)
-
-        name_edit.editingFinished.connect(self._schedule_autosave)
-        value_edit.textChanged.connect(self._schedule_autosave)
-
-        up_btn.clicked.connect(lambda checked=False, r=row: self._card_field_move_up(r))
-        down_btn.clicked.connect(lambda checked=False, r=row: self._card_field_move_down(r))
-        del_btn.clicked.connect(lambda checked=False, r=row: self._card_field_delete(r))
-
-        return row, name_edit, value_edit
 
     def _wire_link_for_fixed_field(
         self,
@@ -1803,6 +1689,37 @@ QLineEdit:focus {{
 
     # ── Карточка: рендер и чтение ─────────────────────────────────────────────
 
+    def _reorder_card_fixed_rows(self) -> None:
+        if not hasattr(self, "_card_fields_end_anchor"):
+            return
+        pinned = [PROJECT_TYPE_FIELD] if PROJECT_TYPE_FIELD in self._card_fixed_rows else []
+        ordered = [
+            field_name
+            for field_name in _CARD_FIXED_FIELDS
+            if field_name not in pinned and self._card_field_value(field_name)
+        ]
+        ordered += [
+            field_name
+            for field_name in _CARD_FIXED_FIELDS
+            if field_name not in pinned and not self._card_field_value(field_name)
+        ]
+        ordered = pinned + ordered
+        for row_widget in self._card_fixed_rows.values():
+            self._card_content_vbox.removeWidget(row_widget)
+        insert_at = self._card_content_vbox.indexOf(self._card_fields_end_anchor)
+        for offset, field_name in enumerate(ordered):
+            row_widget = self._card_fixed_rows.get(field_name)
+            if row_widget is not None:
+                self._card_content_vbox.insertWidget(insert_at + offset, row_widget)
+
+    def _card_field_value(self, field_name: str) -> str:
+        widget = self._card_fixed_edits.get(field_name)
+        if isinstance(widget, QLineEdit):
+            return widget.text().strip()
+        if isinstance(widget, _AutoResizeTextEdit):
+            return widget.toPlainText().strip()
+        return ""
+
     def _render_card(self, project: Project) -> None:
         self._card_title_edit.blockSignals(True)
         self._card_title_edit.setText(project.fields.get(PROJECT_NAME_FIELD, ""))
@@ -1817,10 +1734,16 @@ QLineEdit:focus {{
                     if val:
                         # Мягкая миграция: чтобы реквизиты/таблица тоже видели новое имя
                         project.fields[_CASE_NUMBER_FIELD_NEW] = val
-                edit.setText(val)
+                if isinstance(edit, QLineEdit):
+                    edit.setText(val)
             else:
-                edit.setText(project.fields.get(field_name, ""))
+                value = project.fields.get(field_name, "")
+                if isinstance(edit, QLineEdit):
+                    edit.setText(value)
+                elif isinstance(edit, _AutoResizeTextEdit):
+                    edit.setPlainText(value)
             edit.blockSignals(False)
+        self._reorder_card_fixed_rows()
 
         # Обновляем состояние иконок ссылок для текущего проекта.
         for link_btn, link_field_name in self._card_link_btns:
@@ -1828,27 +1751,16 @@ QLineEdit:focus {{
             link_btn.setVisible(bool(url))
             link_btn.setProperty("_url", url)
 
-        # Очищаем старые доп. поля
-        for row_widget, _, _ in self._card_custom_rows:
-            self._card_extras_vbox.removeWidget(row_widget)
-            left_col_widget = row_widget.property("_left_col_widget")
-            if isinstance(left_col_widget, QWidget):
-                self._unregister_card_left_widget(left_col_widget)
-            row_widget.setParent(None)  # type: ignore[arg-type]
-            row_widget.deleteLater()
-        self._card_custom_rows.clear()
-
-        # Создаём новые
-        for key in self._card_custom_keys.get(project.project_id, []):
-            rw, ne, ve = self._make_custom_field_row(name=key, value=project.fields.get(key, ""))
-            self._card_custom_rows.append((rw, ne, ve))
-            self._card_extras_vbox.addWidget(rw)
-
     def _read_card_into_project(self, project: Project) -> None:
         project.fields[PROJECT_NAME_FIELD] = self._card_title_edit.text().strip()
 
         for field_name, edit in self._card_fixed_edits.items():
-            val = edit.text().strip()
+            if isinstance(edit, QLineEdit):
+                val = edit.text().strip()
+            elif isinstance(edit, _AutoResizeTextEdit):
+                val = edit.toPlainText().strip()
+            else:
+                val = ""
             if field_name == _CASE_NUMBER_FIELD_NEW:
                 project.fields[_CASE_NUMBER_FIELD_NEW] = val
                 # Для совместимости: если в Excel/шапках есть старое поле — держим в синхроне
@@ -1857,15 +1769,6 @@ QLineEdit:focus {{
                     project.fields[_CASE_NUMBER_FIELD_OLD] = val
             else:
                 project.fields[field_name] = val
-
-        custom_keys: list[str] = []
-        for _, name_edit, value_edit in self._card_custom_rows:
-            k = name_edit.text().strip()
-            v = value_edit.toPlainText().strip()
-            if k:
-                project.fields[k] = v
-                custom_keys.append(k)
-        self._card_custom_keys[project.project_id] = custom_keys
 
         row = self.list.currentRow()
         item = self.list.item(row)
@@ -1878,69 +1781,13 @@ QLineEdit:focus {{
         self._card_title_edit.blockSignals(False)
         for edit in self._card_fixed_edits.values():
             edit.blockSignals(True)
-            edit.setText("")
+            if isinstance(edit, QLineEdit):
+                edit.setText("")
+            elif isinstance(edit, _AutoResizeTextEdit):
+                edit.setPlainText("")
             edit.blockSignals(False)
         for link_btn, _ in self._card_link_btns:
             link_btn.setVisible(False)
-        for row_widget, _, _ in self._card_custom_rows:
-            self._card_extras_vbox.removeWidget(row_widget)
-            left_col_widget = row_widget.property("_left_col_widget")
-            if isinstance(left_col_widget, QWidget):
-                self._unregister_card_left_widget(left_col_widget)
-            row_widget.setParent(None)  # type: ignore[arg-type]
-            row_widget.deleteLater()
-        self._card_custom_rows.clear()
-
-    # ── Карточка: управление доп. полями ──────────────────────────────────────
-
-    def _add_card_field(self) -> None:
-        if self._current is None:
-            return
-        rw, ne, ve = self._make_custom_field_row()
-        self._card_custom_rows.append((rw, ne, ve))
-        self._card_extras_vbox.addWidget(rw)
-        ne.setFocus()
-
-    def _find_custom_row_index(self, row_widget: QWidget) -> int:
-        for i, (w, _, _) in enumerate(self._card_custom_rows):
-            if w is row_widget:
-                return i
-        return -1
-
-    def _swap_custom_row_contents(self, i: int, j: int) -> None:
-        _, ne_i, ve_i = self._card_custom_rows[i]
-        _, ne_j, ve_j = self._card_custom_rows[j]
-        n_i, v_i = ne_i.text(), ve_i.toPlainText()
-        n_j, v_j = ne_j.text(), ve_j.toPlainText()
-        ne_i.setText(n_j)
-        ve_i.setPlainText(v_j)
-        ne_j.setText(n_i)
-        ve_j.setPlainText(v_i)
-
-    def _card_field_move_up(self, row_widget: QWidget) -> None:
-        idx = self._find_custom_row_index(row_widget)
-        if idx <= 0:
-            return
-        self._swap_custom_row_contents(idx, idx - 1)
-
-    def _card_field_move_down(self, row_widget: QWidget) -> None:
-        idx = self._find_custom_row_index(row_widget)
-        if idx < 0 or idx >= len(self._card_custom_rows) - 1:
-            return
-        self._swap_custom_row_contents(idx, idx + 1)
-
-    def _card_field_delete(self, row_widget: QWidget) -> None:
-        idx = self._find_custom_row_index(row_widget)
-        if idx < 0:
-            return
-        self._card_custom_rows.pop(idx)
-        self._card_extras_vbox.removeWidget(row_widget)
-        left_col_widget = row_widget.property("_left_col_widget")
-        if isinstance(left_col_widget, QWidget):
-            self._unregister_card_left_widget(left_col_widget)
-        row_widget.setParent(None)  # type: ignore[arg-type]
-        row_widget.deleteLater()
-        self._schedule_autosave()
 
     def _register_card_left_widget(self, widget: QWidget) -> None:
         self._card_left_col_widgets.append(widget)
@@ -2402,7 +2249,6 @@ QLineEdit:focus {{
 
         if project in self._archived_projects:
             self._archived_projects.remove(project)
-        self._card_custom_keys.pop(project.project_id, None)
         self.list.takeItem(row)
 
         if self._archived_projects:
@@ -2593,7 +2439,6 @@ QLineEdit:focus {{
 
         if project in self._projects:
             self._projects.remove(project)
-        self._card_custom_keys.pop(project.project_id, None)
         self.list.takeItem(row)
 
         if self._projects:

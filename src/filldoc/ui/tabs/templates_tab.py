@@ -64,80 +64,107 @@ QToolButton:pressed {{
 }}
 """
 
-_FILL_BTN_STYLE = """
-QPushButton {
-    background-color: #4A90D9;
-    color: #ffffff;
-    border: none;
-    border-radius: 6px;
-    padding: 8px 16px;
-    font-size: 13px;
-    font-weight: bold;
-}
-QPushButton:hover {
-    background-color: #357ABD;
-}
-QPushButton:pressed {
-    background-color: #2A6099;
-}
-QPushButton:disabled {
-    background-color: #9BB8D4;
-    color: #e0e0e0;
-}
+def _fill_btn_style(c: ThemeColors) -> str:
+    border = "#86c8ff" if c.name == "dark" else c.border_input_focus
+    text = "#a8dbff" if c.name == "dark" else c.accent
+    hover_bg = "#12263b" if c.name == "dark" else "#eef6ff"
+    pressed_bg = "#163356" if c.name == "dark" else "#d8ecf8"
+    return f"""
+QPushButton {{
+    background-color: transparent;
+    color: {text};
+    border: 2px dashed {border};
+    border-radius: 10px;
+    padding: 11px 18px;
+    min-height: 42px;
+    font-size: 14px;
+    font-weight: 700;
+}}
+QPushButton:hover {{
+    background-color: {hover_bg};
+    color: {c.accent_text if c.name != "dark" else "#d9f0ff"};
+    border-color: {c.text_accent};
+}}
+QPushButton:pressed {{
+    background-color: {pressed_bg};
+    color: {c.accent_text if c.name != "dark" else "#ffffff"};
+}}
+QPushButton:disabled {{
+    background-color: transparent;
+    color: {c.text_muted};
+    border-color: {c.border_base};
+}}
 """
 
-_SECTION_HEADER_STYLE = """
-QLabel {
+
+def _section_header_style(c: ThemeColors) -> str:
+    return f"""
+QLabel {{
     font-size: 12px;
-    font-weight: bold;
-    color: #1e2a38;
-    padding: 6px 0px 2px 0px;
-}
+    font-weight: 700;
+    color: {c.text_primary};
+    padding: 8px 0px 4px 0px;
+}}
 """
 
-_VAR_LABEL_STYLE = """
-QLabel {
-    font-size: 11px;
-    color: #4a5568;
-    padding: 1px 4px;
-}
-"""
 
-_SUCCESS_LABEL_STYLE = """
-QLabel {
+def _var_label_style(c: ThemeColors) -> str:
+    text_color = "#d7eaff" if c.name == "dark" else c.text_secondary
+    return f"""
+QLabel {{
     font-size: 12px;
-    color: #2d8a4e;
-    padding: 4px 0px;
-}
+    color: {text_color};
+    padding: 2px 6px;
+    background: transparent;
+}}
 """
 
-_PLACEHOLDER_STYLE = """
-QLabel {
+
+def _success_label_style(c: ThemeColors) -> str:
+    return f"""
+QLabel {{
+    font-size: 12px;
+    color: {c.success};
+    font-weight: 600;
+    padding: 6px 2px;
+}}
+"""
+
+
+def _placeholder_style(c: ThemeColors) -> str:
+    return f"""
+QLabel {{
     font-size: 13px;
-    color: #9aa5b4;
+    color: {c.text_muted};
     padding: 20px;
-}
+}}
 """
 
-_TABLE_STYLE = """
-QTableWidget {
-    border: 1px solid #dde2ea;
-    border-radius: 4px;
-    gridline-color: #edf0f5;
+
+def _table_style(c: ThemeColors) -> str:
+    return f"""
+QTableWidget {{
+    background-color: {c.bg_card};
+    color: {c.text_primary};
+    border: 1px solid {c.border_base};
+    border-radius: 8px;
+    gridline-color: {c.border_light};
     font-size: 12px;
-}
-QTableWidget::item {
-    padding: 4px 6px;
-}
-QHeaderView::section {
-    background-color: #f4f6f9;
+    selection-background-color: {c.selection_bg};
+    selection-color: {c.selection_text};
+}}
+QTableWidget::item {{
+    padding: 5px 7px;
+}}
+QHeaderView::section {{
+    background-color: {c.bg_header};
     border: none;
-    border-bottom: 1px solid #dde2ea;
-    padding: 4px 6px;
+    border-bottom: 1px solid {c.border_base};
+    padding: 5px 7px;
     font-size: 12px;
-    font-weight: bold;
-    color: #3a4a5c;
-}
+    font-weight: 700;
+    color: {c.text_secondary};
+}}
 """
 
 # ── Вспомогательные функции ───────────────────────────────────────────────────
@@ -201,6 +228,7 @@ class TemplatesTab(QWidget):
         self._dict = default_dictionary()
         self._current_card: TemplateCard | None = None
         self._missing_table: QTableWidget | None = None
+        self._theme_colors = ThemeManager.instance().colors
 
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
@@ -306,6 +334,7 @@ class TemplatesTab(QWidget):
 
     def apply_theme(self, c: ThemeColors) -> None:
         """Применяет тему ко всем виджетам вкладки."""
+        self._theme_colors = c
         # Кнопки-иконки
         update_icon_btn(self.refresh_btn, _SVG_REFRESH, icon_color=c.icon_color,
                         bg=c.icon_btn_bg, hover=c.icon_btn_hover, pressed=c.icon_btn_pressed)
@@ -342,6 +371,44 @@ QScrollBar::handle:vertical:hover {{ background: {c.scrollbar_handle_hover}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
 """)
+        self.project_combo.setStyleSheet(f"""
+QComboBox {{
+    background-color: {c.bg_input};
+    color: {c.text_primary};
+    border: 1px solid {c.border_input};
+    border-radius: 8px;
+    padding: 6px 10px;
+    min-height: 22px;
+}}
+QComboBox:hover {{
+    border-color: {c.border_input_focus};
+}}
+QComboBox:focus {{
+    border-color: {c.text_accent};
+    background-color: {c.bg_input_focus};
+}}
+QComboBox::drop-down {{
+    border: none;
+    width: 24px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: {c.bg_panel};
+    color: {c.text_primary};
+    border: 1px solid {c.border_base};
+    selection-background-color: {c.selection_bg};
+    selection-color: {c.selection_text};
+}}
+""")
+        self.card_scroll.setStyleSheet(
+            f"QScrollArea, QScrollArea > QWidget > QWidget {{ background: {c.bg_window}; }}"
+        )
+        self._card_container.setStyleSheet(
+            f"background: {c.bg_panel}; border: 1px solid {c.border_base}; border-radius: 10px;"
+        )
+        if self._current_card is not None:
+            self._build_card(self._current_card)
+        else:
+            self._show_placeholder()
 
     # ── Загрузка данных ───────────────────────────────────────────────────────
 
@@ -462,7 +529,7 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none
         self._clear_card_layout()
         lbl = QLabel("← Выберите шаблон в списке слева")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet(_PLACEHOLDER_STYLE)
+        lbl.setStyleSheet(_placeholder_style(self._theme_colors))
         self._card_layout.addWidget(lbl)
 
     def _build_card(self, card: TemplateCard) -> None:
@@ -487,21 +554,21 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none
             + (f" ({len(filled_fields)})" if project else "")
             + ":"
         )
-        filled_hdr.setStyleSheet(_SECTION_HEADER_STYLE)
+        filled_hdr.setStyleSheet(_section_header_style(self._theme_colors))
         lay.addWidget(filled_hdr)
 
         if not project:
             lbl = QLabel("Выберите проект для анализа переменных")
-            lbl.setStyleSheet(_PLACEHOLDER_STYLE)
+            lbl.setStyleSheet(_placeholder_style(self._theme_colors))
             lay.addWidget(lbl)
         elif filled_fields:
             for mf in filled_fields:
                 lbl = QLabel(f"• {mf.display_name}")
-                lbl.setStyleSheet(_VAR_LABEL_STYLE)
+                lbl.setStyleSheet(_var_label_style(self._theme_colors))
                 lay.addWidget(lbl)
         else:
             lbl = QLabel("(нет заполненных переменных)")
-            lbl.setStyleSheet(_VAR_LABEL_STYLE)
+            lbl.setStyleSheet(_var_label_style(self._theme_colors))
             lay.addWidget(lbl)
 
         lay.addWidget(_h_separator())
@@ -509,7 +576,7 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none
         # ── Секция: Недостающие переменные ────────────────────────────
         count_str = str(len(missing_fields)) if project else "—"
         missing_hdr = QLabel(f"Недостающие переменные ({count_str}):")
-        missing_hdr.setStyleSheet(_SECTION_HEADER_STYLE)
+        missing_hdr.setStyleSheet(_section_header_style(self._theme_colors))
         lay.addWidget(missing_hdr)
 
         if project and missing_fields:
@@ -526,7 +593,7 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none
             tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             tbl.setEditTriggers(QAbstractItemView.EditTrigger.AllEditTriggers)
             tbl.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-            tbl.setStyleSheet(_TABLE_STYLE)
+            tbl.setStyleSheet(_table_style(self._theme_colors))
 
             for i, mf in enumerate(missing_fields):
                 name_item = QTableWidgetItem(mf.display_name)
@@ -549,11 +616,11 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none
 
         elif project:
             lbl = QLabel("✓ Все переменные шаблона заполнены!")
-            lbl.setStyleSheet(_SUCCESS_LABEL_STYLE)
+            lbl.setStyleSheet(_success_label_style(self._theme_colors))
             lay.addWidget(lbl)
         else:
             lbl = QLabel("Выберите проект для анализа недостающих переменных")
-            lbl.setStyleSheet(_VAR_LABEL_STYLE)
+            lbl.setStyleSheet(_var_label_style(self._theme_colors))
             lay.addWidget(lbl)
 
         # ── Растяжка ─────────────────────────────────────────────────
@@ -561,7 +628,7 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none
 
         # ── Кнопка «Заполнить шаблон» ────────────────────────────────
         fill_btn = QPushButton("Заполнить шаблон")
-        fill_btn.setStyleSheet(_FILL_BTN_STYLE)
+        fill_btn.setStyleSheet(_fill_btn_style(self._theme_colors))
         fill_btn.setEnabled(bool(project))
         fill_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         fill_btn.clicked.connect(self._fill_template)
