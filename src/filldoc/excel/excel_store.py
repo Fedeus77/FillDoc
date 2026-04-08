@@ -104,10 +104,15 @@ class ExcelProjectStore:
                 wb.save(path)
                 return True
 
-            # Первая строка не совпадает с заголовками — вставляем заголовки перед ней.
-            ws_archive.insert_rows(1)
-            for col_idx, header_val in enumerate(expected_headers, start=1):
-                ws_archive.cell(row=1, column=col_idx).value = header_val
+            # Если первая строка похожа на старую шапку, обновляем её на месте,
+            # а не вставляем новую: иначе в данных остаётся лишняя строка «Имя проекта».
+            if self._is_header_like_row(archive_row1, expected_headers):
+                for col_idx, header_val in enumerate(expected_headers, start=1):
+                    ws_archive.cell(row=1, column=col_idx).value = header_val
+            else:
+                ws_archive.insert_rows(1)
+                for col_idx, header_val in enumerate(expected_headers, start=1):
+                    ws_archive.cell(row=1, column=col_idx).value = header_val
             wb.save(path)
             return True
         except ExcelError:
@@ -500,6 +505,8 @@ class ExcelProjectStore:
             values = ["" if v is None else str(v) for v in row]
             if all(v.strip() == "" for v in values):
                 continue
+            if self._is_header_like_row(values, headers):
+                continue
             fields = {
                 headers[i]: values[i]
                 for i in range(min(len(headers), len(values)))
@@ -515,6 +522,32 @@ class ExcelProjectStore:
                 )
             )
         return projects
+
+    def _is_header_like_row(self, values: list[str], headers: list[str]) -> bool:
+        """Пропускает случайно продублированные строки заголовков внутри данных.
+
+        Такое бывает, когда шапка листа обновляется/восстанавливается и старая
+        строка заголовков остаётся ниже первой строки. Без этой проверки Excel-
+        загрузчик воспринимает её как проект с названием «Имя проекта».
+        """
+        normalized_values = [str(v).strip() for v in values]
+        non_empty_values = [v for v in normalized_values if v]
+        if len(non_empty_values) < 2:
+            return False
+
+        header_set = {h for h in headers if h}
+        if not header_set:
+            return False
+
+        if any(v not in header_set for v in non_empty_values):
+            return False
+
+        positional_matches = sum(
+            1
+            for i, value in enumerate(normalized_values[: len(headers)])
+            if value and value == headers[i]
+        )
+        return positional_matches >= max(2, len(non_empty_values) // 2)
 
     def _find_sheet(self, wb, sheet_name: str):  # noqa: ANN001
         """Ищет лист сначала точно, затем без учёта регистра/пробелов. Возвращает None если не найден."""
@@ -546,6 +579,12 @@ class ExcelProjectStore:
 
         if existing_row1 == expected:
             return  # уже всё правильно
+
+        # Если первая строка похожа на устаревшую шапку, обновляем её на месте.
+        if self._is_header_like_row(existing_row1, expected):
+            for col_idx, header_val in enumerate(headers, start=1):
+                ws.cell(row=1, column=col_idx).value = header_val
+            return
 
         # Первая строка содержит данные — вставляем заголовки перед ней.
         ws.insert_rows(1)
