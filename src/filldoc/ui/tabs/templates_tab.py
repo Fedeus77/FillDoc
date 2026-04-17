@@ -156,6 +156,20 @@ QTableWidget {{
 QTableWidget::item {{
     padding: 5px 7px;
 }}
+QTableWidget QLineEdit {{
+    background-color: transparent;
+    color: {c.text_primary};
+    border: none;
+    border-radius: 0px;
+    padding: 0px 7px;
+    margin: 0px;
+    selection-background-color: {c.selection_bg};
+    selection-color: {c.selection_text};
+}}
+QTableWidget QLineEdit:focus {{
+    background-color: transparent;
+    border: none;
+}}
 QHeaderView::section {{
     background-color: {c.bg_header};
     border: none;
@@ -603,7 +617,7 @@ QComboBox QAbstractItemView {{
                 tbl.setItem(i, 0, name_item)
                 tbl.setItem(i, 1, QTableWidgetItem(""))
 
-            row_h = 26
+            row_h = 30
             tbl.verticalHeader().setDefaultSectionSize(row_h)
             tbl.resizeRowsToContents()
             total_h = sum(tbl.rowHeight(r) for r in range(tbl.rowCount()))
