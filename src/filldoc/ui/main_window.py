@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import QEvent, QObject
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
 
@@ -10,7 +11,19 @@ from filldoc.ui.tabs.templates_tab import TemplatesTab
 from filldoc.ui.tabs.variables_tab import VariablesTab
 from filldoc.ui.tabs.settings_tab import SettingsTab
 from filldoc.core.settings import AppSettings
+from filldoc.ui.icons import SVG_SETTINGS, icon_btn, update_icon_btn
 from filldoc.ui.theme import ThemeManager, build_global_stylesheet
+
+
+class _SettingsButtonPositioner(QObject):
+    def __init__(self, window: "MainWindow") -> None:
+        super().__init__(window)
+        self._window = window
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            self._window._position_settings_button()
+        return super().eventFilter(watched, event)
 
 
 class MainWindow(QMainWindow):
@@ -26,6 +39,8 @@ class MainWindow(QMainWindow):
         self.projects_tab = ProjectsTab(self)
         self.templates_tab = TemplatesTab(self)
         self.variables_tab = VariablesTab(self)
+        self.settings_btn = icon_btn(SVG_SETTINGS, "Settings", icon_size=16, button_size=26)
+        self.settings_btn.clicked.connect(self._show_settings)
 
         self.tabs.addTab(self.projects_tab, "Проекты")
         self.tabs.addTab(self.templates_tab, "Шаблоны")
@@ -42,6 +57,16 @@ class MainWindow(QMainWindow):
         save_sc.activated.connect(self._hotkey_save)
         refresh_sc = QShortcut(QKeySequence("Ctrl+R"), self)
         refresh_sc.activated.connect(self._hotkey_refresh)
+
+        self.settings_tab_index = self.tabs.indexOf(self.settings_tab)
+        self.settings_btn.setToolTip(self.tabs.tabText(self.settings_tab_index))
+        self.tabs.tabBar().setTabVisible(self.settings_tab_index, False)
+        self.settings_btn.setParent(self.tabs)
+        self.settings_btn.show()
+        self._settings_button_positioner = _SettingsButtonPositioner(self)
+        self.tabs.tabBar().installEventFilter(self._settings_button_positioner)
+        self.tabs.installEventFilter(self._settings_button_positioner)
+        self._position_settings_button()
 
         self.settings_tab.settings_changed.connect(self._on_settings_changed)
         self.settings_tab.theme_changed.connect(self._on_theme_changed)
@@ -66,6 +91,28 @@ class MainWindow(QMainWindow):
         for tab in (self.projects_tab, self.templates_tab, self.variables_tab, self.settings_tab):
             if hasattr(tab, "apply_theme"):
                 tab.apply_theme(c)
+        update_icon_btn(
+            self.settings_btn,
+            SVG_SETTINGS,
+            icon_color=c.icon_color,
+            bg=c.bg_tab,
+            hover=c.bg_hover,
+            pressed=c.bg_tab_selected,
+            icon_size=16,
+            button_size=26,
+        )
+        self._position_settings_button()
+
+    def _show_settings(self) -> None:
+        self.tabs.setCurrentIndex(self.settings_tab_index)
+
+    def _position_settings_button(self) -> None:
+        tab_bar = self.tabs.tabBar()
+        margin = 8
+        x = max(margin, self.tabs.width() - self.settings_btn.width() - margin)
+        y = tab_bar.y() + max(0, (tab_bar.height() - self.settings_btn.height()) // 2)
+        self.settings_btn.move(x, y)
+        self.settings_btn.raise_()
 
     def _hotkey_save(self) -> None:
         """Ctrl+S: сохранить в зависимости от активной вкладки."""

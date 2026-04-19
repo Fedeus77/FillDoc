@@ -66,17 +66,25 @@ SVG_LINK = """
   <path d="M14 11a5 5 0 0 1 0 7l-1 1a5 5 0 0 1-7-7l1-1"/>
 </svg>"""
 
+SVG_SETTINGS = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2.0"
+     stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="3"/>
+  <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.15.37.37.7.6 1 .32.25.7.4 1.1.4H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51.6z"/>
+</svg>"""
+
 # ── Стиль кнопки-иконки ───────────────────────────────────────────────────────
 
 _BTN_STYLE = """
 QToolButton {{
     background-color: {bg};
     border: none;
-    border-radius: 9px;
-    min-width:  38px;
-    min-height: 38px;
-    max-width:  38px;
-    max-height: 38px;
+    border-radius: {radius}px;
+    min-width:  {size}px;
+    min-height: {size}px;
+    max-width:  {size}px;
+    max-height: {size}px;
 }}
 QToolButton:hover {{
     background-color: {hover};
@@ -108,12 +116,19 @@ def icon_btn(
     hover: str = "#6B7F96",
     pressed: str = "#556477",
     icon_size: int = 18,
+    button_size: int = 38,
 ) -> QToolButton:
     btn = QToolButton()
     btn.setIcon(make_icon(svg, icon_color, icon_size))
     btn.setIconSize(QSize(icon_size, icon_size))
     btn.setToolTip(tooltip)
-    btn.setStyleSheet(_BTN_STYLE.format(bg=bg, hover=hover, pressed=pressed))
+    btn.setStyleSheet(_BTN_STYLE.format(
+        bg=bg,
+        hover=hover,
+        pressed=pressed,
+        radius=max(4, button_size // 4),
+        size=button_size,
+    ))
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     return btn
 
@@ -126,7 +141,15 @@ def update_icon_btn(
     hover: str = "#6B7F96",
     pressed: str = "#556477",
     icon_size: int = 18,
+    button_size: int = 38,
 ) -> None:
     """Обновляет иконку и стиль существующей кнопки (для смены темы)."""
     btn.setIcon(make_icon(svg, icon_color, icon_size))
-    btn.setStyleSheet(_BTN_STYLE.format(bg=bg, hover=hover, pressed=pressed))
+    btn.setIconSize(QSize(icon_size, icon_size))
+    btn.setStyleSheet(_BTN_STYLE.format(
+        bg=bg,
+        hover=hover,
+        pressed=pressed,
+        radius=max(4, button_size // 4),
+        size=button_size,
+    ))
