@@ -577,6 +577,11 @@ class ExcelProjectStore:
         ]
         expected = [str(h).strip() if h is not None else "" for h in headers]
 
+        if max_r == 1 and not any(existing_row1):
+            for col_idx, header_val in enumerate(headers, start=1):
+                ws.cell(row=1, column=col_idx).value = header_val
+            return
+
         if existing_row1 == expected:
             return  # уже всё правильно
 
