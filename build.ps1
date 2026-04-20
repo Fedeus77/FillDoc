@@ -33,7 +33,13 @@ if (-not (Test-Path "src")) {
 Step "Checking PyInstaller"
 $pyInstallerInstalled = $false
 
-python -m pip show pyinstaller *> $null
+# In Windows PowerShell, native stderr output can be surfaced as a non-terminating
+# NativeCommandError and still interrupt scripts when $ErrorActionPreference="Stop".
+# We only care about exit code, so temporarily relax error action and silence output.
+$prevErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+python -m pip show pyinstaller *> $null 2>&1 | Out-Null
+$ErrorActionPreference = $prevErrorActionPreference
 if ($LASTEXITCODE -eq 0) {
     $pyInstallerInstalled = $true
 }
