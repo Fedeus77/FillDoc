@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
@@ -8,7 +7,7 @@ import webbrowser
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QPoint, QEvent, QRect, QSize, QTimer, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QFont, QFontMetrics, QIcon, QImage, QKeySequence, QPen, QPixmap, QPainter, QShortcut, QTextOption
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QFont, QFontMetrics, QIcon, QKeySequence, QPen, QPainter, QShortcut, QTextOption
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -36,17 +35,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-try:
-    import fitz  # PyMuPDF
-    _HAS_FITZ = True
-except ImportError:
-    _HAS_FITZ = False
-
 from filldoc.core.settings import AppSettings
 from filldoc.excel.excel_store import ExcelProjectStore
 from filldoc.excel.models import Project
+from filldoc.projects.archive_service import ArchiveService
+from filldoc.projects.docs_paths import (
+    project_docs_keys,
+    remember_project_docs_path,
+    resolve_project_docs_path,
+)
+from filldoc.projects.json_import import (
+    JsonImportError,
+    merge_fields_into_project,
+    project_from_json_fields,
+    read_json_fields,
+)
 from filldoc.ui.icons import make_icon as _icons_make_icon, SVG_REFRESH, SVG_SAVE, SVG_ADD, SVG_FOLDER_OPEN, SVG_UPLOAD, SVG_LINK, update_icon_btn
 from filldoc.ui.theme import ThemeColors, ThemeManager
+from filldoc.ui.widgets.document_preview import DocumentPreviewWidget
 
 PROJECT_NAME_FIELD = "Имя проекта"
 PROJECT_TYPE_FIELD = "Тип проекта"
@@ -1169,62 +1175,6 @@ QScrollBar::handle:vertical:hover {{ background: {c.scrollbar_handle_hover}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
 """
 
-    def _preview_scroll_style(self, c: "ThemeColors | None" = None) -> str:
-        if c is None:
-            c = ThemeManager.instance().colors
-        return f"""
-QScrollArea {{
-    background: {c.bg_panel};
-    border: 1px solid {c.border_base};
-    border-radius: 6px;
-}}
-QScrollBar:vertical {{
-    background: {c.bg_scrollbar}; width: 6px; border-radius: 3px; margin: 4px 2px;
-}}
-QScrollBar::handle:vertical {{
-    background: {c.scrollbar_handle}; border-radius: 3px; min-height: 24px;
-}}
-QScrollBar::handle:vertical:hover {{ background: {c.scrollbar_handle_hover}; }}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
-"""
-
-    def _rename_btn_style(self, c: "ThemeColors | None" = None) -> str:
-        if c is None:
-            c = ThemeManager.instance().colors
-        return f"""
-QPushButton {{
-    background: {c.accent};
-    border: none;
-    border-radius: 4px;
-    padding: 2px 12px;
-    font-size: 11px;
-    font-weight: 600;
-    color: {c.accent_text};
-    min-height: 22px;
-}}
-QPushButton:hover {{ background: {c.accent_hover}; }}
-QPushButton:pressed {{ background: {c.accent_pressed}; }}
-QPushButton:disabled {{ background: {c.accent_disabled}; color: {c.text_muted}; }}
-"""
-
-    def _nav_btn_style(self, c: "ThemeColors | None" = None) -> str:
-        if c is None:
-            c = ThemeManager.instance().colors
-        return f"""
-QPushButton {{
-    background: {c.bg_hover};
-    border: 1px solid {c.border_base};
-    border-radius: 4px;
-    padding: 2px 10px;
-    font-size: 10px;
-    color: {c.text_secondary};
-    min-height: 20px;
-}}
-QPushButton:hover {{ background: {c.bg_card_hover}; }}
-QPushButton:pressed {{ background: {c.bg_alternate}; }}
-QPushButton:disabled {{ color: {c.text_muted}; }}
-"""
-
     def _table_style(self) -> str:
         c = ThemeManager.instance().colors
         return f"""
@@ -1455,42 +1405,8 @@ QPushButton:pressed {{ background: {c.bg_alternate}; }}
                 f"color: {c.text_muted}; font-size: 10px; font-style: italic;"
             )
 
-        # Панель предпросмотра
-        if hasattr(self, "_preview_scroll"):
-            self._preview_scroll.setStyleSheet(self._preview_scroll_style(c))
-        if hasattr(self, "_preview_label"):
-            self._preview_label.setStyleSheet(
-                f"background: transparent; color: {c.text_muted}; font-size: 12px; padding: 40px;"
-            )
-        if hasattr(self, "_preview_name_label"):
-            self._preview_name_label.setStyleSheet(
-                f"color: {c.text_secondary}; font-size: 11px; font-weight: 600;"
-            )
-        if hasattr(self, "_preview_rename_edit"):
-            self._preview_rename_edit.setStyleSheet(f"""
-QLineEdit {{
-    background-color: {c.bg_input};
-    border: 1px solid {c.border_input};
-    border-radius: 4px;
-    padding: 1px 6px;
-    font-size: 12px;
-    color: {c.text_primary};
-}}
-QLineEdit:focus {{
-    border-color: {c.border_input_focus};
-    background-color: {c.bg_input_focus};
-}}
-""")
-        if hasattr(self, "_preview_rename_btn"):
-            self._preview_rename_btn.setStyleSheet(self._rename_btn_style(c))
-        if hasattr(self, "_preview_prev_btn"):
-            self._preview_prev_btn.setStyleSheet(self._nav_btn_style(c))
-        if hasattr(self, "_preview_next_btn"):
-            self._preview_next_btn.setStyleSheet(self._nav_btn_style(c))
-        if hasattr(self, "_preview_page_label"):
-            self._preview_page_label.setStyleSheet(
-                f"color: {c.text_secondary}; font-size: 10px; min-width: 100px;"
-            )
+        if hasattr(self, "_document_preview"):
+            self._document_preview.apply_theme(c)
 
     # ── Построение вкладки «Карточка» ────────────────────────────────────────
 
@@ -1814,12 +1730,6 @@ QLineEdit:focus {{
         self._set_card_field_col_width(self._card_field_col_width)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: ANN001
-        if (
-            hasattr(self, "_preview_scroll")
-            and obj is self._preview_scroll.viewport()
-            and event.type() == QEvent.Type.Resize
-        ):
-            self._scale_preview()
         if obj is self.table.viewport() and event.type() == QEvent.Type.Resize:
             # При изменении ширины — пересчитать высоты строк для переноса текста.
             self._requisites_resize_timer.start()
@@ -1881,26 +1791,17 @@ QLineEdit:focus {{
 
     def _read_json_fields(self, path: str) -> dict[str, str] | None:
         try:
-            with open(path, encoding="utf-8") as f:
-                data: dict = json.load(f)
-        except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(self, "JSON", f"Не удалось прочитать файл:\n{e}")
+            return read_json_fields(path)
+        except JsonImportError as e:
+            QMessageBox.warning(self, "JSON", str(e))
             return None
-
-        if not isinstance(data, dict):
-            QMessageBox.warning(self, "JSON", "Файл должен содержать JSON-объект (словарь полей).")
-            return None
-
-        return {str(k): "" if v is None else str(v) for k, v in data.items()}
 
     def _load_from_json(self, path: str) -> None:
         fields = self._read_json_fields(path)
         if fields is None:
             return
 
-        case_number = str(fields.get("№ дела", "") or fields.get("Номер дела", "")).strip()
-        project_id = case_number or Path(path).stem
-        project = Project(project_id=project_id, fields=fields, headers=list(fields.keys()))
+        project = project_from_json_fields(path, fields)
 
         self._projects.append(project)
         self._add_project_to_list(project)
@@ -1932,23 +1833,7 @@ QLineEdit:focus {{
         if project is self._current:
             self._sync_current_to_project()
 
-        added_count = 0
-        replaced_count = 0
-        kept_count = 0
-
-        for key, new_value_raw in fields.items():
-            new_value = new_value_raw.strip()
-            old_value = str(project.fields.get(key, "") or "").strip()
-
-            if key not in project.fields or old_value == "":
-                project.fields[key] = new_value_raw
-                added_count += 1
-                continue
-
-            if new_value == "" or old_value == new_value:
-                kept_count += 1
-                continue
-
+        def should_replace(key: str, old_value: str, new_value: str) -> bool:
             answer = QMessageBox.question(
                 self,
                 "Конфликт значения",
@@ -1962,18 +1847,9 @@ QLineEdit:focus {{
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
-            if answer == QMessageBox.StandardButton.Yes:
-                project.fields[key] = new_value_raw
-                replaced_count += 1
-            else:
-                kept_count += 1
+            return answer == QMessageBox.StandardButton.Yes
 
-        headers = list(project.headers or [])
-        for key in fields:
-            if key and key not in headers:
-                headers.append(key)
-        if headers:
-            project.headers = headers
+        result = merge_fields_into_project(project, fields, should_replace=should_replace)
 
         self._refresh_project_name(project)
         self._refresh_list_item_text(project)
@@ -1983,7 +1859,8 @@ QLineEdit:focus {{
 
         self._schedule_autosave()
         self._show_status(
-            f"JSON загружен: +{added_count} новых, ~{replaced_count} обновлено, {kept_count} без изменений"
+            f"JSON загружен: +{result.added_count} новых, "
+            f"~{result.replaced_count} обновлено, {result.kept_count} без изменений"
         )
 
     # ── Список проектов ───────────────────────────────────────────────────────
@@ -2173,8 +2050,7 @@ QLineEdit:focus {{
             return
 
         try:
-            store = ExcelProjectStore(self._settings.excel_path)
-            store.move_project_to_archive(project)
+            ArchiveService(self._settings.excel_path).move_to_archive(project)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Архив", f"Не удалось архивировать проект:\n{e}")
             return
@@ -2206,8 +2082,7 @@ QLineEdit:focus {{
             return
 
         try:
-            store = ExcelProjectStore(self._settings.excel_path)
-            store.restore_project_from_archive(project)
+            ArchiveService(self._settings.excel_path).restore_from_archive(project)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Архив", f"Не удалось вернуть проект из архива:\n{e}")
             return
@@ -2240,8 +2115,7 @@ QLineEdit:focus {{
             return
 
         try:
-            store = ExcelProjectStore(self._settings.excel_path)
-            store.delete_project_from_archive(project)
+            ArchiveService(self._settings.excel_path).delete_from_archive(project)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Удаление", f"Не удалось удалить проект из архива:\n{e}")
             return
@@ -2263,7 +2137,7 @@ QLineEdit:focus {{
         try:
             store = ExcelProjectStore(self._settings.excel_path)
             self._projects = store.load_projects()
-            self._archived_projects = store.load_projects_from_sheet("Архив")
+            self._archived_projects = ArchiveService(self._settings.excel_path).load_archive()
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Проекты", str(e))
             return
@@ -2298,14 +2172,15 @@ QLineEdit:focus {{
             return
         try:
             store = ExcelProjectStore(self._settings.excel_path)
+            archive_service = ArchiveService(self._settings.excel_path)
             try:
-                store.repair_archive_headers()
+                archive_service.repair_headers()
             except Exception:
                 pass
 
             self._projects = store.load_projects()
             try:
-                self._archived_projects = store.load_projects_from_sheet("Архив")
+                self._archived_projects = archive_service.load_archive()
             except Exception:
                 self._archived_projects = []
 
@@ -2589,8 +2464,8 @@ QPushButton:pressed {{ background: {c0.bg_alternate}; }}
         docs_splitter.addWidget(left_panel)
 
         # ── Правая панель: предпросмотр ──
-        preview_panel = self._build_preview_panel()
-        docs_splitter.addWidget(preview_panel)
+        self._document_preview = DocumentPreviewWidget()
+        docs_splitter.addWidget(self._document_preview)
 
         docs_splitter.setSizes([280, 520])
         docs_splitter.setStretchFactor(0, 0)
@@ -2607,6 +2482,7 @@ QPushButton:pressed {{ background: {c0.bg_alternate}; }}
         )
         self._docs_list.itemChanged.connect(self._on_doc_renamed)
         self._docs_list.currentItemChanged.connect(self._on_doc_selected)
+        self._document_preview.rename_requested.connect(self._rename_from_preview)
         refresh_docs_btn.clicked.connect(self._refresh_docs_list)
 
         return widget
@@ -2635,8 +2511,8 @@ QPushButton:pressed {{ background: {c0.bg_alternate}; }}
                         f"Не удалось прочитать содержимое папки:\n{e}",
                     )
         self._docs_list.blockSignals(False)
-        if hasattr(self, "_preview_label"):
-            self._clear_preview()
+        if hasattr(self, "_document_preview"):
+            self._document_preview.clear()
 
     def _on_file_dropped(self, src_path: str) -> None:
         """Копирует перетащенный файл в папку документов."""
@@ -2680,129 +2556,18 @@ QPushButton:pressed {{ background: {c0.bg_alternate}; }}
         if not new_name or new_name == old_path.name:
             return
         new_path = old_path.parent / new_name
-        self._close_preview_pdf()
+        self._document_preview.close_pdf()
         try:
             old_path.rename(new_path)
             item.setData(Qt.ItemDataRole.UserRole, str(new_path))
-            self._preview_current_path = str(new_path)
-            self._preview_rename_edit.setText(new_name)
-            self._show_preview(str(new_path))
+            self._document_preview.update_after_rename(str(new_path))
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Переименование", f"Не удалось переименовать файл:\n{e}")
             self._docs_list.blockSignals(True)
             item.setText(old_path.name)
             self._docs_list.blockSignals(False)
             if old_path.is_file():
-                self._show_preview(old_path_str)
-
-    # ── Панель предпросмотра ─────────────────────────────────────────────────
-
-    def _build_preview_panel(self) -> QWidget:
-        panel = QWidget()
-        vbox = QVBoxLayout(panel)
-        vbox.setContentsMargins(4, 0, 0, 0)
-        vbox.setSpacing(4)
-        c0 = ThemeManager.instance().colors
-
-        # Строка переименования
-        rename_row = QHBoxLayout()
-        rename_row.setSpacing(4)
-        name_label = QLabel("Имя:")
-        name_label.setStyleSheet(
-            f"color: {c0.text_secondary}; font-size: 11px; font-weight: 600;"
-        )
-        self._preview_name_label = name_label
-        self._preview_rename_edit = QLineEdit()
-        self._preview_rename_edit.setPlaceholderText("Выберите файл…")
-        self._preview_rename_edit.setStyleSheet(f"""
-QLineEdit {{
-    background-color: {c0.bg_input};
-    border: 1px solid {c0.border_input};
-    border-radius: 4px;
-    padding: 1px 6px;
-    font-size: 12px;
-    color: {c0.text_primary};
-}}
-QLineEdit:focus {{
-    border-color: {c0.border_input_focus};
-    background-color: {c0.bg_input_focus};
-}}
-""")
-
-        self._preview_rename_btn = QPushButton("Переименовать")
-        self._preview_rename_btn.setStyleSheet(self._rename_btn_style(c0))
-        self._preview_rename_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._preview_rename_btn.setEnabled(False)
-
-        rename_row.addWidget(name_label)
-        rename_row.addWidget(self._preview_rename_edit, 1)
-        rename_row.addWidget(self._preview_rename_btn)
-        vbox.addLayout(rename_row)
-
-        # Область предпросмотра
-        self._preview_scroll = QScrollArea()
-        self._preview_scroll.setWidgetResizable(True)
-        self._preview_scroll.setFrameShape(QFrame.Shape.StyledPanel)
-        self._preview_scroll.setStyleSheet(self._preview_scroll_style(c0))
-
-        self._preview_label = QLabel("Выберите файл\nдля предпросмотра")
-        self._preview_label.setAlignment(
-            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter
-        )
-        self._preview_label.setStyleSheet(
-            f"background: transparent; color: {c0.text_muted}; font-size: 12px; padding: 40px;"
-        )
-        self._preview_label.setWordWrap(True)
-        self._preview_scroll.setWidget(self._preview_label)
-        vbox.addWidget(self._preview_scroll, 1)
-
-        # Навигация по страницам (для многостраничных PDF)
-        self._preview_nav = QWidget()
-        nav_h = QHBoxLayout(self._preview_nav)
-        nav_h.setContentsMargins(0, 2, 0, 0)
-        nav_h.setSpacing(6)
-
-        self._preview_prev_btn = QPushButton("← Пред.")
-        self._preview_next_btn = QPushButton("След. →")
-        _nav_btn_css = self._nav_btn_style(c0)
-        self._preview_prev_btn.setStyleSheet(_nav_btn_css)
-        self._preview_next_btn.setStyleSheet(_nav_btn_css)
-        self._preview_prev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._preview_next_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        self._preview_page_label = QLabel("")
-        self._preview_page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview_page_label.setStyleSheet(
-            f"color: {c0.text_secondary}; font-size: 10px; min-width: 100px;"
-        )
-
-        nav_h.addStretch()
-        nav_h.addWidget(self._preview_prev_btn)
-        nav_h.addWidget(self._preview_page_label)
-        nav_h.addWidget(self._preview_next_btn)
-        nav_h.addStretch()
-        self._preview_nav.hide()
-        vbox.addWidget(self._preview_nav)
-
-        # Состояние предпросмотра
-        self._preview_original_pixmap: QPixmap | None = None
-        self._preview_pdf_doc = None
-        self._preview_pdf_page: int = 0
-        self._preview_pdf_total: int = 0
-        self._preview_current_path: str = ""
-
-        # Сигналы панели предпросмотра
-        self._preview_rename_btn.clicked.connect(self._rename_from_preview)
-        self._preview_rename_edit.returnPressed.connect(self._rename_from_preview)
-        self._preview_prev_btn.clicked.connect(self._preview_prev_page)
-        self._preview_next_btn.clicked.connect(self._preview_next_page)
-
-        # Масштабирование предпросмотра при изменении размера
-        self._preview_scroll.viewport().installEventFilter(self)
-
-        return panel
-
-    # ── Предпросмотр: выбор и отображение ────────────────────────────────────
+                self._document_preview.set_file(old_path_str)
 
     def _on_doc_selected(
         self,
@@ -2810,165 +2575,13 @@ QLineEdit:focus {{
         _previous: QListWidgetItem | None,
     ) -> None:
         if current is None:
-            self._clear_preview()
+            self._document_preview.clear()
             return
         file_path = current.data(Qt.ItemDataRole.UserRole)
         if not file_path or not Path(file_path).is_file():
-            self._clear_preview()
+            self._document_preview.clear()
             return
-        self._preview_rename_edit.setText(Path(file_path).name)
-        self._preview_rename_btn.setEnabled(True)
-        self._preview_current_path = file_path
-        self._show_preview(file_path)
-
-    def _show_preview(self, file_path: str) -> None:
-        self._close_preview_pdf()
-        suffix = Path(file_path).suffix.lower()
-
-        if suffix == ".pdf":
-            self._show_pdf_preview(file_path)
-        elif suffix in {
-            ".png", ".jpg", ".jpeg", ".gif", ".bmp",
-            ".ico", ".webp", ".tiff", ".tif",
-        }:
-            self._show_image_preview(file_path)
-        else:
-            self._preview_original_pixmap = None
-            self._preview_nav.hide()
-            self._preview_label.setPixmap(QPixmap())
-            self._preview_label.setStyleSheet(
-                "background: transparent; color: #8a9aaa; font-size: 12px; padding: 40px;"
-            )
-            self._preview_label.setText(
-                f"Предпросмотр недоступен\nдля файлов {suffix}"
-                if suffix
-                else "Предпросмотр недоступен"
-            )
-
-    def _show_pdf_preview(self, file_path: str) -> None:
-        if not _HAS_FITZ:
-            self._preview_original_pixmap = None
-            self._preview_nav.hide()
-            self._preview_label.setPixmap(QPixmap())
-            self._preview_label.setStyleSheet(
-                "background: transparent; color: #8a9aaa; font-size: 12px; padding: 40px;"
-            )
-            self._preview_label.setText(
-                "Для предпросмотра PDF установите PyMuPDF:\npip install PyMuPDF"
-            )
-            return
-
-        try:
-            doc = fitz.open(file_path)  # type: ignore[union-attr]
-            self._preview_pdf_doc = doc
-            self._preview_pdf_page = 0
-            self._preview_pdf_total = len(doc)
-            self._render_pdf_page()
-            if self._preview_pdf_total > 1:
-                self._preview_nav.show()
-                self._update_page_nav()
-            else:
-                self._preview_nav.hide()
-        except Exception as e:  # noqa: BLE001
-            self._preview_original_pixmap = None
-            self._preview_nav.hide()
-            self._preview_label.setPixmap(QPixmap())
-            self._preview_label.setStyleSheet(
-                "background: transparent; color: #c44; font-size: 11px; padding: 40px;"
-            )
-            self._preview_label.setText(f"Ошибка открытия PDF:\n{e}")
-
-    def _render_pdf_page(self) -> None:
-        if self._preview_pdf_doc is None:
-            return
-        page = self._preview_pdf_doc[self._preview_pdf_page]
-        mat = fitz.Matrix(2.0, 2.0)  # type: ignore[union-attr]
-        pix = page.get_pixmap(matrix=mat, alpha=False)
-
-        img = QImage(pix.samples, pix.width, pix.height, pix.stride,
-                     QImage.Format.Format_RGB888)
-        pixmap = QPixmap.fromImage(img)
-
-        self._preview_original_pixmap = pixmap
-        self._scale_preview()
-        self._update_page_nav()
-
-    def _show_image_preview(self, file_path: str) -> None:
-        self._preview_nav.hide()
-        pixmap = QPixmap(file_path)
-        if pixmap.isNull():
-            self._preview_original_pixmap = None
-            self._preview_label.setPixmap(QPixmap())
-            self._preview_label.setStyleSheet(
-                "background: transparent; color: #c44; font-size: 11px; padding: 40px;"
-            )
-            self._preview_label.setText("Не удалось загрузить изображение")
-            return
-        self._preview_original_pixmap = pixmap
-        self._scale_preview()
-
-    # ── Предпросмотр: масштабирование и навигация ────────────────────────────
-
-    def _scale_preview(self) -> None:
-        if self._preview_original_pixmap is None or self._preview_original_pixmap.isNull():
-            return
-        vp_w = self._preview_scroll.viewport().width() - 16
-        if vp_w <= 0:
-            vp_w = 400
-        if self._preview_original_pixmap.width() > vp_w:
-            scaled = self._preview_original_pixmap.scaledToWidth(
-                vp_w, Qt.TransformationMode.SmoothTransformation,
-            )
-        else:
-            scaled = self._preview_original_pixmap
-        self._preview_label.setStyleSheet("background: transparent; padding: 4px;")
-        self._preview_label.setText("")
-        self._preview_label.setPixmap(scaled)
-        self._preview_label.setMinimumHeight(scaled.height())
-
-    def _update_page_nav(self) -> None:
-        self._preview_page_label.setText(
-            f"Страница {self._preview_pdf_page + 1} из {self._preview_pdf_total}"
-        )
-        self._preview_prev_btn.setEnabled(self._preview_pdf_page > 0)
-        self._preview_next_btn.setEnabled(
-            self._preview_pdf_page < self._preview_pdf_total - 1
-        )
-
-    def _preview_prev_page(self) -> None:
-        if self._preview_pdf_page > 0:
-            self._preview_pdf_page -= 1
-            self._render_pdf_page()
-            self._preview_scroll.verticalScrollBar().setValue(0)
-
-    def _preview_next_page(self) -> None:
-        if self._preview_pdf_page < self._preview_pdf_total - 1:
-            self._preview_pdf_page += 1
-            self._render_pdf_page()
-            self._preview_scroll.verticalScrollBar().setValue(0)
-
-    def _clear_preview(self) -> None:
-        self._close_preview_pdf()
-        self._preview_original_pixmap = None
-        self._preview_current_path = ""
-        self._preview_rename_edit.setText("")
-        self._preview_rename_btn.setEnabled(False)
-        self._preview_nav.hide()
-        self._preview_label.setPixmap(QPixmap())
-        self._preview_label.setStyleSheet(
-            "background: transparent; color: #8a9aaa; font-size: 12px; padding: 40px;"
-        )
-        self._preview_label.setText("Выберите файл\nдля предпросмотра")
-
-    def _close_preview_pdf(self) -> None:
-        if self._preview_pdf_doc is not None:
-            try:
-                self._preview_pdf_doc.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self._preview_pdf_doc = None
-        self._preview_pdf_page = 0
-        self._preview_pdf_total = 0
+        self._document_preview.set_file(file_path)
 
     # ── Предпросмотр: переименование ─────────────────────────────────────────
 
@@ -2980,7 +2593,7 @@ QLineEdit:focus {{
         if not old_path_str:
             return
         old_path = Path(old_path_str)
-        new_name = self._preview_rename_edit.text().strip()
+        new_name = self._document_preview.rename_text().strip()
         if not new_name or new_name == old_path.name:
             return
         new_path = old_path.parent / new_name
@@ -2991,23 +2604,22 @@ QLineEdit:focus {{
             )
             return
 
-        self._close_preview_pdf()
+        self._document_preview.close_pdf()
         try:
             old_path.rename(new_path)
             self._docs_list.blockSignals(True)
             item.setText(new_name)
             item.setData(Qt.ItemDataRole.UserRole, str(new_path))
             self._docs_list.blockSignals(False)
-            self._preview_current_path = str(new_path)
-            self._show_preview(str(new_path))
+            self._document_preview.update_after_rename(str(new_path))
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(
                 self, "Переименование",
                 f"Не удалось переименовать файл:\n{e}",
             )
-            self._preview_rename_edit.setText(old_path.name)
+            self._document_preview.set_rename_text(old_path.name)
             if old_path.is_file():
-                self._show_preview(old_path_str)
+                self._document_preview.set_file(old_path_str)
 
     def _browse_docs_dir(self) -> None:
         """Открывает диалог выбора папки для документов."""
@@ -3037,15 +2649,11 @@ QLineEdit:focus {{
 
     def _load_project_docs_path(self) -> None:
         """Подставляет в поле пути папку документов текущего проекта."""
-        if self._current is not None:
-            path = self._settings.docs_dir
-            for key in self._project_docs_keys(self._current):
-                saved = self._settings.project_docs_dirs.get(key, "").strip()
-                if saved:
-                    path = saved
-                    break
-        else:
-            path = ""
+        path = resolve_project_docs_path(
+            self._current,
+            default_docs_dir=self._settings.docs_dir,
+            project_docs_dirs=self._settings.project_docs_dirs,
+        )
         self._docs_path_edit.blockSignals(True)
         self._docs_path_edit.setText(path)
         self._docs_path_edit.blockSignals(False)
@@ -3053,9 +2661,11 @@ QLineEdit:focus {{
     def _on_docs_path_changed(self) -> None:
         """Сохраняет путь к папке документов для текущего проекта и обновляет список."""
         path = self._docs_path_edit.text().strip()
-        if self._current is not None:
-            for key in self._project_docs_keys(self._current):
-                self._settings.project_docs_dirs[key] = path
+        remember_project_docs_path(
+            self._current,
+            path,
+            self._settings.project_docs_dirs,
+        )
         try:
             self._settings.save()
         except Exception:  # noqa: BLE001
@@ -3064,22 +2674,4 @@ QLineEdit:focus {{
 
     def _project_docs_keys(self, project: Project) -> list[str]:
         """Возвращает набор стабильных ключей для привязки папки документов."""
-        keys: list[str] = []
-
-        pid = (project.project_id or "").strip()
-        if pid:
-            # legacy key format
-            keys.append(pid)
-            keys.append(f"id:{pid}")
-
-        row_index = getattr(project, "row_index", None)
-        if isinstance(row_index, int) and row_index > 1:
-            keys.append(f"row:{row_index}")
-
-        for case_key in ("Номер осн. дела", "Номер дела", "№ дела", "№дела"):
-            case_num = str(project.fields.get(case_key, "")).strip()
-            if case_num:
-                keys.append(f"case:{case_num}")
-
-        # Удаляем дубликаты, сохраняя порядок.
-        return list(dict.fromkeys(keys))
+        return project_docs_keys(project)
