@@ -8,11 +8,14 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -20,6 +23,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -31,8 +35,10 @@ from filldoc.core.settings import AppSettings
 from filldoc.excel.models import Project
 from filldoc.fill.missing_fields import compute_missing_fields
 from filldoc.generator.docx_generator import generate_docx_from_template
+from filldoc.generator.filename_rules import apply_output_name_rule
 from filldoc.projects.repository import ProjectConflictError, ProjectRepository
 from filldoc.templates.models import TemplateCard
+from filldoc.templates.quality import analyze_template_quality
 from filldoc.templates.scanner import TemplateLibrary
 from filldoc.variables.dictionary import default_dictionary
 from filldoc.ui.icons import make_icon, icon_btn, update_icon_btn, SVG_REFRESH, SVG_SAVE, SVG_FOLDER
@@ -180,33 +186,35 @@ QHeaderView::section {{
 }}
 """
 
+
+def _input_style(c: ThemeColors) -> str:
+    return f"""
+QLineEdit, QTextEdit {{
+    background-color: {c.bg_input};
+    color: {c.text_primary};
+    border: 1px solid {c.border_input};
+    border-radius: 8px;
+    padding: 6px 8px;
+    selection-background-color: {c.selection_bg};
+    selection-color: {c.selection_text};
+}}
+QLineEdit:focus, QTextEdit:focus {{
+    border-color: {c.text_accent};
+    background-color: {c.bg_input_focus};
+}}
+"""
+
+
+def _check_style(c: ThemeColors) -> str:
+    return f"""
+QCheckBox {{
+    color: {c.text_primary};
+    font-size: 12px;
+    padding: 4px 0px;
+}}
+"""
+
 # ── Вспомогательные функции ───────────────────────────────────────────────────
-
-def _apply_output_name_rule(rule: str, filename_stem: str, fields: dict[str, str]) -> str:
-    """
-    Применяет правило нейминга к имени выходного файла.
-
-    Поддерживаемые токены:
-    - {%filename%}  — имя файла шаблона без расширения
-    - {ИмяПоля}     — значение поля из карточки проекта (case-sensitive)
-
-    Пустые значения полей заменяются на пустую строку; несколько подряд
-    идущих разделителей " - " схлопываются в один.
-    """
-    import re as _re
-
-    result = rule.replace("{%filename%}", filename_stem)
-
-    def _replace_field(m: _re.Match) -> str:
-        key = m.group(1)
-        return (fields.get(key) or "").strip()
-
-    result = _re.sub(r"\{([^{}]+)\}", _replace_field, result)
-
-    # Убираем лишние разделители, возникшие из-за пустых полей
-    result = _re.sub(r"(\s*-\s*){2,}", " - ", result)
-    result = _re.sub(r"^\s*-\s*|\s*-\s*$", "", result)
-    return result.strip() or filename_stem
 
 
 def _icon_btn(
@@ -241,12 +249,23 @@ class TemplatesTab(QWidget):
         self._dict = default_dictionary()
         self._current_card: TemplateCard | None = None
         self._missing_table: QTableWidget | None = None
+        self._bulk_mode = False
         self._theme_colors = ThemeManager.instance().colors
+        self._card_name_edit: QLineEdit | None = None
+        self._card_category_edit: QLineEdit | None = None
+        self._card_rule_edit: QLineEdit | None = None
+        self._card_active_check: QCheckBox | None = None
+        self._card_comment_edit: QTextEdit | None = None
 
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.setInterval(1200)
         self._autosave_timer.timeout.connect(self._autosave_to_excel)
+
+        self._card_save_timer = QTimer(self)
+        self._card_save_timer.setSingleShot(True)
+        self._card_save_timer.setInterval(800)
+        self._card_save_timer.timeout.connect(self._save_current_card)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -306,7 +325,18 @@ class TemplatesTab(QWidget):
 
         self.tree = QTreeWidget(self)
         self.tree.setHeaderHidden(True)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         left_lay.addWidget(self.tree, 1)
+
+        bulk_actions = QHBoxLayout()
+        bulk_actions.setSpacing(6)
+        self.bulk_analyze_btn = QPushButton("Анализ пакета")
+        self.bulk_generate_btn = QPushButton("Сгенерировать пакет")
+        self.bulk_analyze_btn.setEnabled(False)
+        self.bulk_generate_btn.setEnabled(False)
+        bulk_actions.addWidget(self.bulk_analyze_btn)
+        bulk_actions.addWidget(self.bulk_generate_btn)
+        left_lay.addLayout(bulk_actions)
         split.addWidget(left_wrap)
 
         # Правая часть — область карточки с прокруткой
@@ -331,7 +361,10 @@ class TemplatesTab(QWidget):
         self.save_btn.clicked.connect(self._save_to_excel)
         self.open_templates_dir_btn.clicked.connect(self._open_templates_dir)
         self.tree.currentItemChanged.connect(self._on_tree_item_changed)
+        self.tree.itemChanged.connect(self._on_tree_check_changed)
         self.project_combo.currentIndexChanged.connect(self._on_project_changed)
+        self.bulk_analyze_btn.clicked.connect(self._build_bulk_card)
+        self.bulk_generate_btn.clicked.connect(self._generate_bulk)
 
     # ── Статус-бар ────────────────────────────────────────────────────────────
 
@@ -347,12 +380,16 @@ class TemplatesTab(QWidget):
 
     def apply_theme(self, c: ThemeColors) -> None:
         """Применяет тему ко всем виджетам вкладки."""
+        self._card_save_timer.stop()
+        self._save_current_card(show_status=False)
         self._theme_colors = c
         # Кнопки-иконки
         update_icon_btn(self.refresh_btn, _SVG_REFRESH, icon_color=c.icon_color,
                         bg=c.icon_btn_bg, hover=c.icon_btn_hover, pressed=c.icon_btn_pressed)
         update_icon_btn(self.save_btn, _SVG_SAVE, icon_color=c.icon_color,
                         bg=c.icon_btn_bg, hover=c.icon_btn_hover, pressed=c.icon_btn_pressed)
+        self.bulk_analyze_btn.setStyleSheet(_fill_btn_style(c))
+        self.bulk_generate_btn.setStyleSheet(_fill_btn_style(c))
 
         # Открыть папку шаблонов
         self.open_templates_dir_btn.setIcon(make_icon(SVG_FOLDER, c.text_secondary))
@@ -476,12 +513,16 @@ QComboBox QAbstractItemView {{
             self._cards = lib.scan()
             self._by_path = {c.path: c for c in self._cards}
             self._render_tree()
+            self._update_bulk_buttons()
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Шаблоны", str(e))
 
     # ── Дерево шаблонов ───────────────────────────────────────────────────────
 
     def _render_tree(self) -> None:
+        checked_paths = set(self._checked_template_paths())
+        current_path = self._current_card.path if self._current_card else None
+        self.tree.blockSignals(True)
         self.tree.clear()
         cat_nodes: dict[str, QTreeWidgetItem] = {}
 
@@ -498,15 +539,26 @@ QComboBox QAbstractItemView {{
                 self.tree.addTopLevelItem(node)
 
             parent_node = cat_nodes[category_key]
-            item = QTreeWidgetItem([Path(c.path).stem])
+            label = c.name if c.active else f"{c.name} (не активен)"
+            item = QTreeWidgetItem([label])
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                0,
+                Qt.CheckState.Checked if c.path in checked_paths and c.active else Qt.CheckState.Unchecked,
+            )
             item.setData(0, Qt.ItemDataRole.UserRole, c.path)
             parent_node.addChild(item)
+            if current_path and c.path == current_path:
+                self.tree.setCurrentItem(item)
 
         self.tree.expandAll()
+        self.tree.blockSignals(False)
 
     # ── Обработчики событий ───────────────────────────────────────────────────
 
     def _on_tree_item_changed(self, current, _prev) -> None:
+        self._card_save_timer.stop()
+        self._save_current_card(show_status=False)
         if not current:
             self._current_card = None
             self._show_placeholder()
@@ -524,20 +576,32 @@ QComboBox QAbstractItemView {{
         self._current_card = card
         self._build_card(card)
 
+    def _on_tree_check_changed(self, _item, _column) -> None:
+        self._update_bulk_buttons()
+
     def _on_project_changed(self) -> None:
-        if self._current_card:
+        self._update_bulk_buttons()
+        if self._bulk_mode:
+            self._build_bulk_card()
+        elif self._current_card:
             self._build_card(self._current_card)
 
     # ── Карточка шаблона ─────────────────────────────────────────────────────
 
     def _clear_card_layout(self) -> None:
         self._missing_table = None
+        self._card_name_edit = None
+        self._card_category_edit = None
+        self._card_rule_edit = None
+        self._card_active_check = None
+        self._card_comment_edit = None
         while self._card_layout.count():
             child = self._card_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
 
     def _show_placeholder(self) -> None:
+        self._bulk_mode = False
         self._clear_card_layout()
         lbl = QLabel("← Выберите шаблон в списке слева")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -545,6 +609,7 @@ QComboBox QAbstractItemView {{
         self._card_layout.addWidget(lbl)
 
     def _build_card(self, card: TemplateCard) -> None:
+        self._bulk_mode = False
         self._clear_card_layout()
 
         project = self._current_project()
@@ -559,6 +624,72 @@ QComboBox QAbstractItemView {{
         lay = self._card_layout
         lay.setContentsMargins(16, 16, 16, 16)
         lay.setSpacing(6)
+
+        title = QLabel("Карточка шаблона")
+        title.setStyleSheet(_section_header_style(self._theme_colors))
+        lay.addWidget(title)
+
+        form_wrap = QWidget(self)
+        form = QFormLayout(form_wrap)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(6)
+
+        self._card_name_edit = QLineEdit(card.name)
+        self._card_category_edit = QLineEdit(card.category)
+        self._card_rule_edit = QLineEdit(card.output_name_rule)
+        self._card_active_check = QCheckBox("Активен")
+        self._card_active_check.setChecked(card.active)
+        self._card_comment_edit = QTextEdit(card.comment)
+        self._card_comment_edit.setFixedHeight(72)
+
+        for edit in (self._card_name_edit, self._card_category_edit, self._card_rule_edit):
+            edit.setStyleSheet(_input_style(self._theme_colors))
+            edit.textChanged.connect(self._schedule_card_save)
+        self._card_comment_edit.setStyleSheet(_input_style(self._theme_colors))
+        self._card_comment_edit.textChanged.connect(self._schedule_card_save)
+        self._card_active_check.setStyleSheet(_check_style(self._theme_colors))
+        self._card_active_check.stateChanged.connect(self._schedule_card_save)
+
+        form.addRow("Имя:", self._card_name_edit)
+        form.addRow("Категория:", self._card_category_edit)
+        form.addRow("Правило имени:", self._card_rule_edit)
+        form.addRow("Статус:", self._card_active_check)
+        form.addRow("Комментарий:", self._card_comment_edit)
+        lay.addWidget(form_wrap)
+
+        variables_hdr = QLabel(f"Найденные переменные ({len(card.variables_unique)}):")
+        variables_hdr.setStyleSheet(_section_header_style(self._theme_colors))
+        lay.addWidget(variables_hdr)
+        if card.variables_unique:
+            for raw in card.variables_unique:
+                lbl = QLabel(f"• {{{raw}}}")
+                lbl.setStyleSheet(_var_label_style(self._theme_colors))
+                lay.addWidget(lbl)
+        else:
+            lbl = QLabel("(переменные не найдены)")
+            lbl.setStyleSheet(_var_label_style(self._theme_colors))
+            lay.addWidget(lbl)
+
+        quality_issues = analyze_template_quality(
+            card,
+            self._dict,
+            project.fields if project else None,
+        )
+        quality_hdr = QLabel(f"Качество шаблона ({len(quality_issues)}):")
+        quality_hdr.setStyleSheet(_section_header_style(self._theme_colors))
+        lay.addWidget(quality_hdr)
+        if quality_issues:
+            for issue in quality_issues:
+                lbl = QLabel(f"• {issue.message}")
+                lbl.setWordWrap(True)
+                lbl.setStyleSheet(_var_label_style(self._theme_colors))
+                lay.addWidget(lbl)
+        else:
+            lbl = QLabel("✓ Замечаний не найдено")
+            lbl.setStyleSheet(_success_label_style(self._theme_colors))
+            lay.addWidget(lbl)
+
+        lay.addWidget(_h_separator())
 
         # ── Секция: Переменные в реквизитах ──────────────────────────
         filled_hdr = QLabel(
@@ -648,12 +779,78 @@ QComboBox QAbstractItemView {{
 
     # ── Вспомогательные методы ────────────────────────────────────────────────
 
+    def _schedule_card_save(self) -> None:
+        if self._current_card and not self._bulk_mode:
+            self._card_save_timer.start()
+
+    def _save_current_card(self, show_status: bool = True) -> None:
+        card = self._current_card
+        if not card or self._bulk_mode:
+            return
+        if not all(
+            (
+                self._card_name_edit,
+                self._card_category_edit,
+                self._card_rule_edit,
+                self._card_active_check,
+                self._card_comment_edit,
+            )
+        ):
+            return
+
+        card.name = self._card_name_edit.text().strip() or Path(card.path).stem
+        card.category = self._card_category_edit.text().strip()
+        card.output_name_rule = self._card_rule_edit.text().strip()
+        card.active = self._card_active_check.isChecked()
+        card.comment = self._card_comment_edit.toPlainText().strip()
+
+        if not self._settings.templates_dir:
+            return
+        try:
+            TemplateLibrary(self._settings.templates_dir).save_card(card)
+            self._by_path[card.path] = card
+            current = self.tree.currentItem()
+            if current and current.data(0, Qt.ItemDataRole.UserRole) == card.path:
+                self.tree.blockSignals(True)
+                current.setText(0, card.name if card.active else f"{card.name} (не активен)")
+                if not card.active:
+                    current.setCheckState(0, Qt.CheckState.Unchecked)
+                self.tree.blockSignals(False)
+            self._update_bulk_buttons()
+            if show_status:
+                self._show_status("Карточка шаблона сохранена")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Шаблоны", f"Не удалось сохранить карточку шаблона: {e}")
+
     def _current_project(self) -> Project | None:
         pid = self.project_combo.currentData()
         for p in self._projects:
             if p.internal_id == pid:
                 return p
         return None
+
+    def _checked_template_paths(self) -> list[str]:
+        paths: list[str] = []
+        root_count = self.tree.topLevelItemCount()
+        for i in range(root_count):
+            root = self.tree.topLevelItem(i)
+            for j in range(root.childCount()):
+                item = root.child(j)
+                if item.checkState(0) != Qt.CheckState.Checked:
+                    continue
+                path = item.data(0, Qt.ItemDataRole.UserRole)
+                if path:
+                    paths.append(path)
+        return paths
+
+    def _checked_template_cards(self) -> list[TemplateCard]:
+        paths = set(self._checked_template_paths())
+        return [card for card in self._cards if card.path in paths and card.active]
+
+    def _update_bulk_buttons(self) -> None:
+        enabled = bool(self._current_project() and self._checked_template_cards())
+        self.bulk_analyze_btn.setEnabled(enabled)
+        self.bulk_generate_btn.setEnabled(enabled)
 
     def _collect_missing_values(self) -> dict[str, str]:
         result: dict[str, str] = {}
@@ -668,6 +865,46 @@ QComboBox QAbstractItemView {{
                 result[k] = v
         return result
 
+    def _apply_missing_values_to_project(self, project: Project) -> None:
+        extra = self._collect_missing_values()
+        for k, v in extra.items():
+            if v.strip():
+                project.fields[k] = v.strip()
+
+    def _merge_template_vars(self, cards: list[TemplateCard]) -> list[str]:
+        merged_vars: list[str] = []
+        seen: set[str] = set()
+        for card in cards:
+            for raw in card.variables_unique:
+                key = raw.strip()
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged_vars.append(raw)
+        return merged_vars
+
+    def _build_generation_mapping(
+        self,
+        project: Project,
+        cards: list[TemplateCard],
+    ) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        for k, v in project.fields.items():
+            mapping[str(k)] = str(v or "")
+        for card in cards:
+            for raw in card.variables_unique:
+                entry = self._dict.resolve(raw)
+                if entry:
+                    val = (
+                        project.fields.get(entry.display_name)
+                        or project.fields.get(entry.technical_name)
+                        or ""
+                    )
+                    mapping[raw] = str(val)
+                else:
+                    mapping[raw] = str(project.fields.get(raw.strip(), project.fields.get(raw, "")))
+        return mapping
+
     def _schedule_autosave(self) -> None:
         self._autosave_timer.start()
 
@@ -675,10 +912,7 @@ QComboBox QAbstractItemView {{
         project = self._current_project()
         if not project or not self._settings.excel_path:
             return
-        extra = self._collect_missing_values()
-        for k, v in extra.items():
-            if v.strip():
-                project.fields[k] = v.strip()
+        self._apply_missing_values_to_project(project)
         try:
             ProjectRepository(self._settings.excel_path).save_project_fields(project)
             self._show_status("Сохранено в Excel")
@@ -734,10 +968,7 @@ QComboBox QAbstractItemView {{
             )
             return
 
-        extra = self._collect_missing_values()
-        for k, v in extra.items():
-            if v.strip():
-                project.fields[k] = v.strip()
+        self._apply_missing_values_to_project(project)
 
         try:
             repository = ProjectRepository(self._settings.excel_path)
@@ -761,10 +992,168 @@ QComboBox QAbstractItemView {{
             QMessageBox.critical(self, "Сохранение", str(e))
             return
 
-        if self._current_card:
+        if self._bulk_mode:
+            self._build_bulk_card()
+        elif self._current_card:
             self._build_card(self._current_card)
 
         self._show_status("Изменения сохранены в Excel")
+
+    # ── Массовая генерация ───────────────────────────────────────────────────
+
+    def _build_bulk_card(self) -> None:
+        self._card_save_timer.stop()
+        self._save_current_card(show_status=False)
+        self._bulk_mode = True
+        self._clear_card_layout()
+
+        project = self._current_project()
+        cards = self._checked_template_cards()
+        lay = self._card_layout
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(6)
+
+        title = QLabel(f"Пакет документов ({len(cards)})")
+        title.setStyleSheet(_section_header_style(self._theme_colors))
+        lay.addWidget(title)
+
+        if not project:
+            lbl = QLabel("Выберите проект для пакетной генерации")
+            lbl.setStyleSheet(_placeholder_style(self._theme_colors))
+            lay.addWidget(lbl)
+            return
+        if not cards:
+            lbl = QLabel("Отметьте активные шаблоны в списке слева")
+            lbl.setStyleSheet(_placeholder_style(self._theme_colors))
+            lay.addWidget(lbl)
+            return
+
+        for card in cards:
+            lbl = QLabel(f"• {card.category + ' / ' if card.category else ''}{card.name}")
+            lbl.setStyleSheet(_var_label_style(self._theme_colors))
+            lay.addWidget(lbl)
+
+        lay.addWidget(_h_separator())
+
+        merged_vars = self._merge_template_vars(cards)
+        missing_fields, filled_fields = compute_missing_fields(
+            merged_vars,
+            project.fields,
+            self._dict,
+        )
+
+        summary = QLabel(
+            f"Всего переменных: {len(merged_vars)}. "
+            f"Заполнено: {len(filled_fields)}. "
+            f"Нужно заполнить: {len(missing_fields)}."
+        )
+        summary.setStyleSheet(_var_label_style(self._theme_colors))
+        lay.addWidget(summary)
+
+        missing_hdr = QLabel(f"Общие недостающие поля ({len(missing_fields)}):")
+        missing_hdr.setStyleSheet(_section_header_style(self._theme_colors))
+        lay.addWidget(missing_hdr)
+
+        if missing_fields:
+            tbl = QTableWidget(len(missing_fields), 2)
+            tbl.setHorizontalHeaderLabels(["Поле", "Значение"])
+            tbl.horizontalHeader().setSectionResizeMode(
+                0, QHeaderView.ResizeMode.ResizeToContents
+            )
+            tbl.horizontalHeader().setSectionResizeMode(
+                1, QHeaderView.ResizeMode.Stretch
+            )
+            tbl.verticalHeader().setVisible(False)
+            tbl.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            tbl.setEditTriggers(QAbstractItemView.EditTrigger.AllEditTriggers)
+            tbl.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+            tbl.setStyleSheet(_table_style(self._theme_colors))
+
+            for i, mf in enumerate(missing_fields):
+                name_item = QTableWidgetItem(mf.display_name)
+                name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                tbl.setItem(i, 0, name_item)
+                tbl.setItem(i, 1, QTableWidgetItem(""))
+
+            row_h = 30
+            tbl.verticalHeader().setDefaultSectionSize(row_h)
+            tbl.resizeRowsToContents()
+            total_h = sum(tbl.rowHeight(r) for r in range(tbl.rowCount()))
+            tbl.setFixedHeight(min(total_h + 36, 360))
+
+            self._missing_table = tbl
+            tbl.itemChanged.connect(self._schedule_autosave)
+            lay.addWidget(tbl)
+        else:
+            lbl = QLabel("✓ Все поля пакета заполнены")
+            lbl.setStyleSheet(_success_label_style(self._theme_colors))
+            lay.addWidget(lbl)
+
+        lay.addStretch(1)
+        generate_btn = QPushButton("Сгенерировать пакет документов")
+        generate_btn.setStyleSheet(_fill_btn_style(self._theme_colors))
+        generate_btn.setEnabled(bool(cards))
+        generate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        generate_btn.clicked.connect(self._generate_bulk)
+        lay.addWidget(generate_btn)
+
+    def _generate_bulk(self) -> None:
+        project = self._current_project()
+        if not project:
+            QMessageBox.warning(self, "Генерация", "Выберите проект.")
+            return
+        cards = self._checked_template_cards()
+        if not cards:
+            QMessageBox.warning(self, "Генерация", "Отметьте хотя бы один активный шаблон.")
+            return
+        if not self._settings.output_dir:
+            QMessageBox.warning(
+                self,
+                "Генерация",
+                "Не указан каталог вывода (см. Настройки).",
+            )
+            return
+
+        if not self._bulk_mode:
+            merged_vars = self._merge_template_vars(cards)
+            missing_fields, _filled_fields = compute_missing_fields(
+                merged_vars,
+                project.fields,
+                self._dict,
+            )
+            if missing_fields:
+                self._build_bulk_card()
+                self._show_status("Заполните общие недостающие поля пакета")
+                return
+
+        self._apply_missing_values_to_project(project)
+        mapping = self._build_generation_mapping(project, cards)
+
+        out_files: list[str] = []
+        try:
+            for card in cards:
+                out_name = apply_output_name_rule(
+                    card.output_name_rule,
+                    card.name,
+                    project.fields,
+                )
+                out_path = generate_docx_from_template(
+                    card.path,
+                    self._settings.output_dir,
+                    out_name,
+                    mapping,
+                )
+                out_files.append(out_path)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Генерация", str(e))
+            return
+
+        self._show_status(f"Сформировано документов: {len(out_files)}")
+        QMessageBox.information(
+            self,
+            "Генерация",
+            "Сформировано документов:\n" + "\n".join(out_files),
+        )
 
     # ── Заполнение шаблона ────────────────────────────────────────────────────
 
@@ -784,29 +1173,9 @@ QComboBox QAbstractItemView {{
             )
             return
 
-        # Применяем введённые значения
-        extra = self._collect_missing_values()
-        for k, v in extra.items():
-            if v.strip():
-                project.fields[k] = v.strip()
-
-        # Строим словарь подстановки
-        mapping: dict[str, str] = {}
-        for k, v in project.fields.items():
-            mapping[str(k)] = str(v or "")
-        for raw in card.variables_unique:
-            entry = self._dict.resolve(raw)
-            if entry:
-                val = (
-                    project.fields.get(entry.display_name)
-                    or project.fields.get(entry.technical_name)
-                    or ""
-                )
-                mapping[raw] = str(val)
-            else:
-                mapping[raw] = str(project.fields.get(raw, ""))
-
-        out_name = _apply_output_name_rule(card.output_name_rule, card.name, project.fields)
+        self._apply_missing_values_to_project(project)
+        mapping = self._build_generation_mapping(project, [card])
+        out_name = apply_output_name_rule(card.output_name_rule, card.name, project.fields)
 
         try:
             out_path = generate_docx_from_template(

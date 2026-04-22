@@ -67,3 +67,27 @@ def test_scan_preserves_manual_output_name_rule(tmp_path: Path) -> None:
     assert card.output_name_rule == "{%filename%} custom {client}"
     cached_again = json.loads(cache_path.read_text(encoding="utf-8"))
     assert cached_again["output_name_rule"] == "{%filename%} custom {client}"
+
+
+def test_scan_preserves_editable_template_card_fields(tmp_path: Path) -> None:
+    _make_docx(tmp_path / "folder" / "template.docx")
+    library = TemplateLibrary(str(tmp_path))
+    library.scan()
+    cache_path = tmp_path / ".filldoc" / "folder__template.docx.json"
+    data = json.loads(cache_path.read_text(encoding="utf-8"))
+    data.update(
+        {
+            "name": "Custom name",
+            "category": "Custom category",
+            "active": False,
+            "comment": "Internal note",
+        }
+    )
+    cache_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    [card] = library.scan()
+
+    assert card.name == "Custom name"
+    assert card.category == "Custom category"
+    assert card.active is False
+    assert card.comment == "Internal note"

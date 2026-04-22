@@ -5,6 +5,7 @@ import re
 
 _bad_chars = re.compile(r'[<>:"/\\|?*\x00-\x1F]')
 _ws = re.compile(r"\s+")
+_field_token = re.compile(r"\{([^{}]+)\}")
 
 
 def safe_filename(name: str) -> str:
@@ -14,6 +15,30 @@ def safe_filename(name: str) -> str:
     if not s:
         return "document"
     return s
+
+
+def apply_output_name_rule(
+    rule: str,
+    filename_stem: str,
+    fields: dict[str, str],
+) -> str:
+    """
+    Applies a template output-name rule.
+
+    Supported tokens:
+    - {%filename%}: template file name without extension
+    - {Field name}: value from the selected project fields
+    """
+    result = (rule or "").replace("{%filename%}", filename_stem)
+
+    def replace_field(match: re.Match) -> str:
+        key = match.group(1).strip()
+        return (fields.get(key) or "").strip()
+
+    result = _field_token.sub(replace_field, result)
+    result = re.sub(r"(\s*-\s*){2,}", " - ", result)
+    result = re.sub(r"^\s*-\s*|\s*-\s*$", "", result)
+    return result.strip() or filename_stem
 
 
 def ensure_unique_path(path):

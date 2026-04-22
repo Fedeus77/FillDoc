@@ -12,7 +12,7 @@ _var_re = re.compile(r"\{([^{}]+)\}")
 
 
 def _extract_from_text(text: str) -> list[str]:
-    return [m.group(1).strip() for m in _var_re.finditer(text or "")]
+    return [m.group(1) for m in _var_re.finditer(text or "")]
 
 
 def extract_docx_variables(docx_path: str) -> tuple[list[str], list[str]]:

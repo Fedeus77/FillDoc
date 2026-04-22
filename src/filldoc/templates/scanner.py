@@ -38,21 +38,38 @@ class TemplateLibrary:
             category = str(rel.parent) if hasattr(rel, "parent") else ""
             variables_in_order, variables_unique = extract_docx_variables(str(p))
 
-            # Читаем существующий кеш, чтобы сохранить ручные правки output_name_rule
+            # Читаем существующий кеш, чтобы сохранить ручные правки карточки.
             cached = self._load_card(root, rel if isinstance(rel, Path) else Path(p.name))
-            output_name_rule = cached.output_name_rule if cached is not None else "{%filename%} - {ДОЛЖНИК}"
 
             card = TemplateCard(
-                name=p.stem,
+                name=cached.name if cached is not None and cached.name else p.stem,
                 path=str(p),
-                category=category if category != "." else "",
+                category=(
+                    cached.category
+                    if cached is not None
+                    else category if category != "." else ""
+                ),
                 variables_in_order=variables_in_order,
                 variables_unique=variables_unique,
-                output_name_rule=output_name_rule,
+                output_name_rule=(
+                    cached.output_name_rule
+                    if cached is not None
+                    else "{%filename%} - {ДОЛЖНИК}"
+                ),
+                active=cached.active if cached is not None else True,
+                comment=cached.comment if cached is not None else "",
             )
             cards.append(card)
             self._save_card(root, rel if isinstance(rel, Path) else Path(p.name), card)
         return sorted(cards, key=lambda c: (c.category.lower(), c.name.lower()))
+
+    def save_card(self, card: TemplateCard) -> None:
+        root = Path(self.templates_dir)
+        try:
+            rel = Path(card.path).relative_to(root)
+        except Exception:  # noqa: BLE001
+            rel = Path(card.path).name
+        self._save_card(root, Path(rel), card)
 
     def _load_card(self, root: Path, rel: Path) -> TemplateCard | None:
         """Загружает сохранённую карточку из JSON-кеша; возвращает None если не найдена."""
@@ -69,6 +86,7 @@ class TemplateLibrary:
                 variables_unique=data.get("variables_unique", []),
                 output_name_rule=data.get("output_name_rule", "{%filename%} - {ДОЛЖНИК}"),
                 active=data.get("active", True),
+                comment=data.get("comment", ""),
             )
         except Exception:  # noqa: BLE001
             return None

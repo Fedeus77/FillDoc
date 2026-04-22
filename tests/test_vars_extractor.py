@@ -40,3 +40,9 @@ class TestExtractDocxVariables:
         p = _make_docx(tmp_path, "Без переменных")
         _, uniq = extract_docx_variables(str(p))
         assert uniq == []
+
+    def test_preserves_inner_spaces_for_quality_checks(self, tmp_path: Path) -> None:
+        p = _make_docx(tmp_path, "Должник: { Должник }")
+        ordered, uniq = extract_docx_variables(str(p))
+        assert ordered == [" Должник "]
+        assert uniq == [" Должник "]

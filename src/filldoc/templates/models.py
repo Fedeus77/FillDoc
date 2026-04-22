@@ -12,4 +12,5 @@ class TemplateCard:
     variables_unique: list[str] = field(default_factory=list)
     output_name_rule: str = "{%filename%} - {ДОЛЖНИК}"
     active: bool = True
+    comment: str = ""
 

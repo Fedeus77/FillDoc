@@ -20,6 +20,7 @@ from filldoc.core.settings import AppSettings
 from filldoc.excel.models import Project
 from filldoc.fill.missing_fields import compute_missing_fields
 from filldoc.generator.docx_generator import generate_docx_from_template
+from filldoc.generator.filename_rules import apply_output_name_rule
 from filldoc.projects.repository import ProjectRepository
 from filldoc.templates.scanner import TemplateLibrary
 from filldoc.variables.dictionary import default_dictionary
@@ -211,16 +212,7 @@ class FillTab(QWidget):
         out_files = []
         try:
             for c in cards:
-                customer = (project.fields.get("Заказчик") or "").strip()
-                debtor = (project.fields.get("Должник") or "").strip()
-                # Простое правило имени файла для MVP:
-                # {Имя шаблона} - {Заказчик} - {Должник}
-                parts = [c.name]
-                if customer:
-                    parts.append(customer)
-                if debtor:
-                    parts.append(debtor)
-                out_name = " - ".join(parts)
+                out_name = apply_output_name_rule(c.output_name_rule, c.name, project.fields)
                 out = generate_docx_from_template(c.path, self._settings.output_dir, out_name, mapping)
                 out_files.append(out)
         except Exception as e:  # noqa: BLE001
