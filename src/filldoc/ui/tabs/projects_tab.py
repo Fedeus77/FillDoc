@@ -7,9 +7,8 @@ import shutil
 import webbrowser
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPoint, QByteArray, QEvent, QRect, QSize, QTimer, Signal
+from PySide6.QtCore import Qt, QPoint, QEvent, QRect, QSize, QTimer, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QFont, QFontMetrics, QIcon, QImage, QKeySequence, QPen, QPixmap, QPainter, QShortcut, QTextOption
-from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,

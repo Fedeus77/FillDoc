@@ -47,13 +47,13 @@ class FillTab(QWidget):
         root.addWidget(split, 1)
 
         left = QWidget(self)
-        l = QVBoxLayout(left)
-        l.addWidget(QLabel("Шаблоны (можно выбрать несколько):"))
+        left_layout = QVBoxLayout(left)
+        left_layout.addWidget(QLabel("Шаблоны (можно выбрать несколько):"))
         self.templates_list = QListWidget(self)
         self.templates_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-        l.addWidget(self.templates_list, 1)
+        left_layout.addWidget(self.templates_list, 1)
         self.analyze_btn = QPushButton("Сформировать список полей")
-        l.addWidget(self.analyze_btn)
+        left_layout.addWidget(self.analyze_btn)
         split.addWidget(left)
 
         right = QWidget(self)

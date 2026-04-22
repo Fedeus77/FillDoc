@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSize, QTimer
-from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -564,7 +563,7 @@ QComboBox QAbstractItemView {{
 
         # ── Секция: Переменные в реквизитах ──────────────────────────
         filled_hdr = QLabel(
-            f"Переменные в реквизитах"
+            "Переменные в реквизитах"
             + (f" ({len(filled_fields)})" if project else "")
             + ":"
         )

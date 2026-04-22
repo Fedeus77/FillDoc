@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from filldoc.variables.dictionary import default_dictionary, VariableEntry, VariableDictionary
+from filldoc.variables.dictionary import default_dictionary
 from filldoc.variables.normalize import normalize_var_name
 
 

@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from filldoc.core.settings import AppSettings
-from filldoc.ui.theme import ThemeColors, ThemeManager
+from filldoc.ui.theme import ThemeColors
 
 
 # ── Переключатель тёмной/светлой темы ────────────────────────────────────────
