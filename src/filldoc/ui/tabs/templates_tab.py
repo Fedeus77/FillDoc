@@ -28,10 +28,10 @@ from PySide6.QtWidgets import (
 )
 
 from filldoc.core.settings import AppSettings
-from filldoc.excel.excel_store import ExcelProjectStore
 from filldoc.excel.models import Project
 from filldoc.fill.missing_fields import compute_missing_fields
 from filldoc.generator.docx_generator import generate_docx_from_template
+from filldoc.projects.repository import ProjectConflictError, ProjectRepository
 from filldoc.templates.models import TemplateCard
 from filldoc.templates.scanner import TemplateLibrary
 from filldoc.variables.dictionary import default_dictionary
@@ -446,13 +446,12 @@ QComboBox QAbstractItemView {{
         if not self._settings.excel_path:
             return
         try:
-            store = ExcelProjectStore(self._settings.excel_path)
-            self._projects = store.load_projects()
+            self._projects = ProjectRepository(self._settings.excel_path).load_projects()
             prev_id = self.project_combo.currentData()
             self.project_combo.blockSignals(True)
             self.project_combo.clear()
             for p in self._projects:
-                self.project_combo.addItem(self._project_display_name(p), p.project_id)
+                self.project_combo.addItem(self._project_display_name(p), p.internal_id)
             # Restore previous selection by stored project_id
             restore_idx = -1
             for i in range(self.project_combo.count()):
@@ -652,7 +651,7 @@ QComboBox QAbstractItemView {{
     def _current_project(self) -> Project | None:
         pid = self.project_combo.currentData()
         for p in self._projects:
-            if p.project_id == pid:
+            if p.internal_id == pid:
                 return p
         return None
 
@@ -681,10 +680,10 @@ QComboBox QAbstractItemView {{
             if v.strip():
                 project.fields[k] = v.strip()
         try:
-            from filldoc.excel.excel_store import ExcelProjectStore
-            store = ExcelProjectStore(self._settings.excel_path)
-            store.save_project_fields(project)
+            ProjectRepository(self._settings.excel_path).save_project_fields(project)
             self._show_status("Сохранено в Excel")
+        except ProjectConflictError:
+            self._show_status("Excel изменился снаружи. Автосохранение пропущено.")
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Автосохранение", str(e))
 
@@ -741,8 +740,23 @@ QComboBox QAbstractItemView {{
                 project.fields[k] = v.strip()
 
         try:
-            store = ExcelProjectStore(self._settings.excel_path)
-            store.save_project_fields(project)
+            repository = ProjectRepository(self._settings.excel_path)
+            try:
+                repository.save_project_fields(project)
+            except ProjectConflictError as conflict:
+                answer = QMessageBox.question(
+                    self,
+                    "Конфликт Excel",
+                    (
+                        "Excel-файл изменился после загрузки проекта.\n"
+                        f"Затронуто проектов: {len(conflict.conflicts)}.\n\n"
+                        "Перезаписать данные в Excel текущей версией из FillDoc?"
+                    ),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+                repository.save_project_fields(project, force=True)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Сохранение", str(e))
             return

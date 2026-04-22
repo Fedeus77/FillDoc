@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, MutableMapping
 
-from filldoc.excel.models import Project
+from filldoc.excel.models import FILLDOC_ID_FIELD, Project
 
 
 CASE_NUMBER_KEYS: tuple[str, ...] = (
@@ -16,6 +16,10 @@ CASE_NUMBER_KEYS: tuple[str, ...] = (
 def project_docs_keys(project: Project) -> list[str]:
     """Return stable keys used to bind a documents folder to a project."""
     keys: list[str] = []
+
+    stable_id = str(project.fields.get(FILLDOC_ID_FIELD, "") or "").strip()
+    if stable_id:
+        keys.append(f"id:{stable_id}")
 
     pid = (project.project_id or "").strip()
     if pid:
@@ -64,4 +68,3 @@ def remember_project_docs_path(
 
     for key in project_docs_keys(project):
         project_docs_dirs[key] = path
-

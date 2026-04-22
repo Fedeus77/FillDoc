@@ -22,7 +22,8 @@ from PySide6.QtWidgets import (
 )
 
 from filldoc.core.settings import AppSettings
-from filldoc.excel.excel_store import ExcelProjectStore
+from filldoc.excel.models import FILLDOC_ID_FIELD
+from filldoc.projects.repository import ProjectRepository
 from filldoc.ui.theme import ThemeColors, ThemeManager
 
 # ── SVG иконки ───────────────────────────────────────────────────────────────
@@ -290,10 +291,9 @@ QToolButton:pressed {{ background-color: {c.icon_btn_pressed}; }}
             )
             return
         try:
-            store = ExcelProjectStore(self._settings.excel_path)
-            projects = store.load_projects()
+            projects = ProjectRepository(self._settings.excel_path).load_projects()
             if projects:
-                self._headers = [h for h in projects[0].headers if h.strip()]
+                self._headers = [h for h in projects[0].headers if h.strip() and h != FILLDOC_ID_FIELD]
             else:
                 self._headers = []
         except Exception as e:  # noqa: BLE001

@@ -36,14 +36,14 @@ from PySide6.QtWidgets import (
 )
 
 from filldoc.core.settings import AppSettings
-from filldoc.excel.excel_store import ExcelProjectStore
-from filldoc.excel.models import Project
+from filldoc.excel.models import FILLDOC_ID_FIELD, Project
 from filldoc.projects.archive_service import ArchiveService
 from filldoc.projects.docs_paths import (
     project_docs_keys,
     remember_project_docs_path,
     resolve_project_docs_path,
 )
+from filldoc.projects.repository import ProjectConflictError, ProjectRepository
 from filldoc.projects.json_import import (
     JsonImportError,
     merge_fields_into_project,
@@ -2135,9 +2135,9 @@ QPushButton:pressed {{ background: {c.bg_alternate}; }}
         if not self._settings.excel_path:
             return
         try:
-            store = ExcelProjectStore(self._settings.excel_path)
-            self._projects = store.load_projects()
-            self._archived_projects = ArchiveService(self._settings.excel_path).load_archive()
+            repository = ProjectRepository(self._settings.excel_path)
+            self._projects = repository.load_projects()
+            self._archived_projects = repository.load_archive()
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Проекты", str(e))
             return
@@ -2171,16 +2171,15 @@ QPushButton:pressed {{ background: {c.bg_alternate}; }}
             QMessageBox.warning(self, "Проекты", "Не указан путь к Excel-файлу проектов (см. Настройки).")
             return
         try:
-            store = ExcelProjectStore(self._settings.excel_path)
-            archive_service = ArchiveService(self._settings.excel_path)
+            repository = ProjectRepository(self._settings.excel_path)
             try:
-                archive_service.repair_headers()
+                repository.repair_archive_headers()
             except Exception:
                 pass
 
-            self._projects = store.load_projects()
+            self._projects = repository.load_projects()
             try:
-                self._archived_projects = archive_service.load_archive()
+                self._archived_projects = repository.load_archive()
             except Exception:
                 self._archived_projects = []
 
@@ -2231,11 +2230,11 @@ QPushButton:pressed {{ background: {c.bg_alternate}; }}
         items: list[tuple[str, str]] = []
         if headers:
             for h in headers:
-                if not h or h == PROJECT_NAME_FIELD:
+                if not h or h in {PROJECT_NAME_FIELD, FILLDOC_ID_FIELD}:
                     continue
                 items.append((h, project.fields.get(h, "")))
         else:
-            items = [(k, v) for k, v in project.fields.items() if k != PROJECT_NAME_FIELD]
+            items = [(k, v) for k, v in project.fields.items() if k not in {PROJECT_NAME_FIELD, FILLDOC_ID_FIELD}]
         self.table.blockSignals(True)
         self.table.setRowCount(len(items))
         for i, (k, v) in enumerate(items):
@@ -2268,6 +2267,8 @@ QPushButton:pressed {{ background: {c.bg_alternate}; }}
                 fields[k] = v
         if PROJECT_NAME_FIELD in project.fields:
             fields[PROJECT_NAME_FIELD] = project.fields[PROJECT_NAME_FIELD]
+        if FILLDOC_ID_FIELD in project.fields:
+            fields[FILLDOC_ID_FIELD] = project.fields[FILLDOC_ID_FIELD]
         project.fields = fields
 
     def _add_project(self) -> None:
@@ -2305,8 +2306,7 @@ QPushButton:pressed {{ background: {c.bg_alternate}; }}
 
         if self._settings.excel_path and project.row_index is not None:
             try:
-                store = ExcelProjectStore(self._settings.excel_path)
-                store.delete_project(project)
+                ProjectRepository(self._settings.excel_path).delete_project(project)
             except Exception as e:  # noqa: BLE001
                 QMessageBox.critical(self, "Проекты", f"Не удалось удалить проект из Excel:\n{e}")
                 return
@@ -2361,8 +2361,26 @@ QPushButton:pressed {{ background: {c.bg_alternate}; }}
                     ordered_projects.append(p)
             self._projects = ordered_projects
 
-            store = ExcelProjectStore(self._settings.excel_path)
-            store.save_all_projects(self._projects, self._archived_projects)
+            repository = ProjectRepository(self._settings.excel_path)
+            try:
+                repository.save_all_projects(self._projects, self._archived_projects)
+            except ProjectConflictError as conflict:
+                if silent:
+                    self._show_status("Excel изменился снаружи. Автосохранение пропущено.")
+                    return
+                answer = QMessageBox.question(
+                    self,
+                    "Конфликт Excel",
+                    (
+                        "Excel-файл изменился после загрузки проектов.\n"
+                        f"Затронуто проектов: {len(conflict.conflicts)}.\n\n"
+                        "Перезаписать данные в Excel текущей версией из FillDoc?"
+                    ),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+                repository.save_all_projects(self._projects, self._archived_projects, force=True)
             if not silent:
                 self._show_status("Все изменения синхронизированы с Excel")
         except Exception as e:  # noqa: BLE001

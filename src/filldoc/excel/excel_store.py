@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import logging
 import shutil
+import uuid
 from pathlib import Path
 
 from openpyxl import load_workbook
 
 from filldoc.core.errors import ExcelError
-from .models import Project
+from .models import FILLDOC_ID_FIELD, Project
 
 log = logging.getLogger("filldoc.excel")
 
@@ -44,9 +47,13 @@ class ExcelProjectStore:
         if not path.exists():
             raise ExcelError("Excel-файл недоступен или не существует.")
         try:
-            wb = load_workbook(filename=path, read_only=False, data_only=True)
+            wb = load_workbook(filename=path, read_only=False, data_only=False)
             ws = wb["Текущие"] if "Текущие" in wb.sheetnames else wb.worksheets[0]
-            return self._load_projects_from_worksheet(ws)
+            if self._ensure_filldoc_ids_on_sheet(ws):
+                wb.save(path)
+            projects = self._load_projects_from_worksheet(ws)
+            wb.close()
+            return projects
         except ExcelError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -58,11 +65,16 @@ class ExcelProjectStore:
         if not path.exists():
             raise ExcelError("Excel-файл недоступен или не существует.")
         try:
-            wb = load_workbook(filename=path, read_only=False, data_only=True)
+            wb = load_workbook(filename=path, read_only=False, data_only=False)
             ws = self._find_sheet(wb, sheet_name)
             if ws is None:
+                wb.close()
                 return []
-            return self._load_projects_from_worksheet(ws)
+            if self._ensure_filldoc_ids_on_sheet(ws):
+                wb.save(path)
+            projects = self._load_projects_from_worksheet(ws)
+            wb.close()
+            return projects
         except ExcelError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -194,17 +206,21 @@ class ExcelProjectStore:
 
         try:
             wb = load_workbook(filename=path, read_only=False, data_only=False)
-            ws = wb.worksheets[0]
+            ws = self._current_sheet(wb)
+            self._ensure_filldoc_ids_on_sheet(ws)
             headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
-            target_row = project.row_index
+            target_row = self._resolve_project_row(ws, project)
             if target_row is None or target_row < 2 or target_row > (ws.max_row or 0):
                 raise ExcelError("Не удалось определить строку проекта в Excel для сохранения.")
 
             header_to_col = {headers[i]: i + 1 for i in range(len(headers)) if headers[i]}
-            for k, v in project.fields.items():
+            for k, v in self._project_fields_for_save(project).items():
                 if k in header_to_col:
                     ws.cell(row=target_row, column=header_to_col[k]).value = v
             wb.save(path)
+            project.row_index = target_row
+            project.headers = [h for h in headers if h]
+            project.loaded_snapshot = self.fields_snapshot(self._project_fields_for_save(project))
         except PermissionError as e:
             raise ExcelError(
                 "Не удалось сохранить изменения: Excel-файл занят или недоступен для записи. "
@@ -225,12 +241,13 @@ class ExcelProjectStore:
 
         try:
             wb = load_workbook(filename=path, read_only=False, data_only=False)
-            ws = wb.worksheets[0]
+            ws = self._current_sheet(wb)
+            self._ensure_filldoc_ids_on_sheet(ws)
             headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
 
             header_to_idx = {h: i for i, h in enumerate(headers) if h}
             new_row: list[str] = [""] * len(headers)
-            for k, v in project.fields.items():
+            for k, v in self._project_fields_for_save(project).items():
                 if k in header_to_idx:
                     new_row[header_to_idx[k]] = v
 
@@ -238,6 +255,7 @@ class ExcelProjectStore:
             project.row_index = ws.max_row
             project.headers = [h for h in headers if h]
             wb.save(path)
+            project.loaded_snapshot = self.fields_snapshot(self._project_fields_for_save(project))
         except PermissionError as e:
             raise ExcelError(
                 "Не удалось добавить проект: Excel-файл занят или недоступен для записи. "
@@ -268,6 +286,7 @@ class ExcelProjectStore:
             wb = load_workbook(filename=path, read_only=False, data_only=False)
 
             ws_current = wb["Текущие"] if "Текущие" in wb.sheetnames else wb.worksheets[0]
+            self._ensure_filldoc_ids_on_sheet(ws_current)
             headers = [str(c.value).strip() if c.value is not None else "" for c in ws_current[1]]
             if not any(headers):
                 raise ExcelError("Не найдена строка заголовков в Excel.")
@@ -279,12 +298,13 @@ class ExcelProjectStore:
 
             for idx, project in enumerate(active_projects, start=2):
                 row_values: list[str] = [""] * len(headers)
-                for k, v in project.fields.items():
+                for k, v in self._project_fields_for_save(project).items():
                     if k in header_to_idx:
                         row_values[header_to_idx[k]] = v
                 ws_current.append(row_values)
                 project.row_index = idx
                 project.headers = [h for h in headers if h]
+                project.loaded_snapshot = self.fields_snapshot(self._project_fields_for_save(project))
 
             if archived_projects is not None:
                 ws_archive = self._find_sheet(wb, "Архив")
@@ -299,12 +319,13 @@ class ExcelProjectStore:
 
                 for idx, project in enumerate(archived_projects, start=2):
                     row_values = [""] * len(headers)
-                    for k, v in project.fields.items():
+                    for k, v in self._project_fields_for_save(project).items():
                         if k in header_to_idx:
                             row_values[header_to_idx[k]] = v
                     ws_archive.append(row_values)
                     project.row_index = idx
                     project.headers = [h for h in headers if h]
+                    project.loaded_snapshot = self.fields_snapshot(self._project_fields_for_save(project))
 
             wb.save(path)
         except PermissionError as e:
@@ -345,6 +366,7 @@ class ExcelProjectStore:
                 if current_sheet_name in wb.sheetnames
                 else wb.worksheets[0]
             )
+            self._ensure_filldoc_ids_on_sheet(ws_current)
 
             ws_archive = self._find_sheet(wb, archive_sheet_name)
             if ws_archive is None:
@@ -354,15 +376,14 @@ class ExcelProjectStore:
             current_headers = [c.value for c in ws_current[1]]
             self._ensure_headers_on_sheet(ws_archive, current_headers)
 
-            row_idx = self._find_row_by_case_number(ws_current, case_number) if case_number else None
-            if row_idx is None:
-                row_idx = project.row_index
+            row_idx = self._resolve_project_row(ws_current, project)
             if row_idx is None or row_idx < 2 or row_idx > (ws_current.max_row or 0):
                 raise ExcelError("Не удалось определить строку проекта в Excel для архивации.")
 
             row_values = [cell.value for cell in ws_current[row_idx]]
             ws_archive.append(row_values)
             project.row_index = ws_archive.max_row
+            project.loaded_snapshot = self._snapshot_row(ws_archive, project.row_index)
 
             ws_current.delete_rows(row_idx, 1)
             wb.save(path)
@@ -401,6 +422,8 @@ class ExcelProjectStore:
                 if current_sheet_name in wb.sheetnames
                 else wb.worksheets[0]
             )
+            self._ensure_filldoc_ids_on_sheet(ws_current)
+            self._ensure_filldoc_ids_on_sheet(ws_archive)
 
             row_idx = self._resolve_archive_row(ws_archive, project)
             if row_idx is None:
@@ -412,6 +435,7 @@ class ExcelProjectStore:
             row_values = [cell.value for cell in ws_archive[row_idx]]
             ws_current.append(row_values)
             project.row_index = ws_current.max_row
+            project.loaded_snapshot = self._snapshot_row(ws_current, project.row_index)
 
             ws_archive.delete_rows(row_idx, 1)
             wb.save(path)
@@ -431,16 +455,17 @@ class ExcelProjectStore:
         if not path.exists():
             raise ExcelError("Excel-файл недоступен или не существует.")
 
-        if project.row_index is None:
+        if project.row_index is None and not project.internal_id:
             raise ExcelError("Невозможно удалить проект: не задан номер строки в Excel.")
 
         self.create_backup()
 
         try:
             wb = load_workbook(filename=path, read_only=False, data_only=False)
-            ws = wb.worksheets[0]
-            target_row = project.row_index
-            if target_row < 2 or target_row > (ws.max_row or 0):
+            ws = self._current_sheet(wb)
+            self._ensure_filldoc_ids_on_sheet(ws)
+            target_row = self._resolve_project_row(ws, project)
+            if target_row is None or target_row < 2 or target_row > (ws.max_row or 0):
                 raise ExcelError("Не удалось определить строку проекта в Excel для удаления.")
             ws.delete_rows(target_row, 1)
             wb.save(path)
@@ -493,6 +518,124 @@ class ExcelProjectStore:
 
     # ------------------------------------------------------------------ приватные вспомогательные
 
+    @staticmethod
+    def fields_snapshot(fields: dict[str, str]) -> str:
+        normalized = {str(k): "" if v is None else str(v) for k, v in fields.items() if str(k).strip()}
+        payload = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def current_project_snapshot(
+        self,
+        project: Project,
+        sheet_name: str | None = None,
+    ) -> str | None:
+        path = Path(self.excel_path)
+        if not path.exists():
+            raise ExcelError("Excel-файл недоступен или не существует.")
+        try:
+            wb = load_workbook(filename=path, read_only=False, data_only=False)
+            ws = self._find_sheet(wb, sheet_name) if sheet_name else self._current_sheet(wb)
+            if ws is None:
+                wb.close()
+                return None
+            self._ensure_filldoc_ids_on_sheet(ws)
+            row_idx = self._resolve_project_row(ws, project)
+            snapshot = self._snapshot_row(ws, row_idx) if row_idx is not None else None
+            wb.close()
+            return snapshot
+        except ExcelError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise ExcelError(f"Не удалось проверить состояние проекта в Excel: {e}") from e
+
+    def _project_fields_for_save(self, project: Project) -> dict[str, str]:
+        if not project.internal_id:
+            project.internal_id = uuid.uuid4().hex
+        fields = dict(project.fields)
+        fields[FILLDOC_ID_FIELD] = project.internal_id
+        project.fields[FILLDOC_ID_FIELD] = project.internal_id
+        return fields
+
+    def _headers_from_sheet(self, ws) -> list[str]:  # noqa: ANN001
+        return [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
+
+    def _ensure_filldoc_ids_on_sheet(self, ws) -> bool:  # noqa: ANN001
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            ws.append([FILLDOC_ID_FIELD])
+            return True
+
+        headers = [str(h).strip() if h is not None else "" for h in rows[0]]
+        changed = False
+        if FILLDOC_ID_FIELD in headers:
+            id_col = headers.index(FILLDOC_ID_FIELD) + 1
+        else:
+            id_col = len(headers) + 1
+            ws.cell(row=1, column=id_col).value = FILLDOC_ID_FIELD
+            headers.append(FILLDOC_ID_FIELD)
+            changed = True
+
+        for row_idx in range(2, (ws.max_row or 0) + 1):
+            values = [
+                "" if ws.cell(row=row_idx, column=col).value is None else str(ws.cell(row=row_idx, column=col).value)
+                for col in range(1, len(headers) + 1)
+            ]
+            if all(v.strip() == "" for idx, v in enumerate(values) if idx != id_col - 1):
+                continue
+            if self._is_header_like_row(values, headers):
+                continue
+            current_id = ws.cell(row=row_idx, column=id_col).value
+            if current_id is None or str(current_id).strip() == "":
+                ws.cell(row=row_idx, column=id_col).value = uuid.uuid4().hex
+                changed = True
+        return changed
+
+    def _row_fields(self, ws, row_idx: int) -> dict[str, str]:  # noqa: ANN001
+        headers = self._headers_from_sheet(ws)
+        fields: dict[str, str] = {}
+        for col_idx, header in enumerate(headers, start=1):
+            if not header:
+                continue
+            value = ws.cell(row=row_idx, column=col_idx).value
+            fields[header] = "" if value is None else str(value)
+        return fields
+
+    def _snapshot_row(self, ws, row_idx: int) -> str:  # noqa: ANN001
+        return self.fields_snapshot(self._row_fields(ws, row_idx))
+
+    def _resolve_project_row(self, ws, project: Project) -> int | None:  # noqa: ANN001
+        found = self._find_row_by_internal_id(ws, project.internal_id)
+        if found is not None:
+            return found
+
+        case_number = self._extract_case_number(project.fields)
+        if case_number:
+            found = self._find_row_by_case_number(ws, case_number)
+            if found is not None:
+                return found
+
+        if project.row_index is not None and 2 <= project.row_index <= (ws.max_row or 0):
+            return project.row_index
+
+        return None
+
+    def _find_row_by_internal_id(self, ws, internal_id: str) -> int | None:  # noqa: ANN001
+        internal_id = (internal_id or "").strip()
+        if not internal_id:
+            return None
+
+        headers = self._headers_from_sheet(ws)
+        try:
+            col = headers.index(FILLDOC_ID_FIELD) + 1
+        except ValueError:
+            return None
+
+        for r in range(2, (ws.max_row or 0) + 1):
+            v = ws.cell(row=r, column=col).value
+            if v is not None and str(v).strip() == internal_id:
+                return r
+        return None
+
     def _load_projects_from_worksheet(self, ws) -> list[Project]:  # noqa: ANN001
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
@@ -513,12 +656,15 @@ class ExcelProjectStore:
                 if headers[i]
             }
             pid = self._extract_case_number(fields) or f"row:{idx}"
+            internal_id = str(fields.get(FILLDOC_ID_FIELD, "") or "").strip() or uuid.uuid4().hex
             projects.append(
                 Project(
                     project_id=pid,
                     fields=fields,
+                    internal_id=internal_id,
                     headers=headers,
                     row_index=idx,
+                    loaded_snapshot=self.fields_snapshot(fields),
                 )
             )
         return projects
@@ -558,6 +704,9 @@ class ExcelProjectStore:
             if name.strip().lower() == target:
                 return wb[name]
         return None
+
+    def _current_sheet(self, wb):  # noqa: ANN001
+        return wb["Текущие"] if "Текущие" in wb.sheetnames else wb.worksheets[0]
 
     def _ensure_headers_on_sheet(self, ws, headers: list) -> None:  # noqa: ANN001
         """
@@ -622,6 +771,10 @@ class ExcelProjectStore:
         archive_max = ws_archive.max_row or 0
         if archive_max < 2:
             return None
+
+        found_by_id = self._find_row_by_internal_id(ws_archive, project.internal_id)
+        if found_by_id is not None and 2 <= found_by_id <= archive_max:
+            return found_by_id
 
         # 1. По номеру дела
         case_number = self._extract_case_number(project.fields)

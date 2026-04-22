@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from filldoc.core.errors import ExcelError
 from filldoc.excel.excel_store import ExcelProjectStore
-from filldoc.excel.models import Project
+from filldoc.excel.models import FILLDOC_ID_FIELD, Project
 
 
 def _make_workbook(
@@ -64,8 +64,10 @@ def test_add_project_appends_new_row(tmp_path: Path) -> None:
 
     ws = load_workbook(excel_path).active
     assert project.row_index == 3
-    assert project.headers == ["Name", "Status", "Amount"]
+    assert project.headers == ["Name", "Status", "Amount", FILLDOC_ID_FIELD]
     assert [ws.cell(3, col).value for col in range(1, 4)] == ["Second", "Ready", "20"]
+    assert ws.cell(1, 4).value == FILLDOC_ID_FIELD
+    assert ws.cell(3, 4).value == project.internal_id
 
 
 def test_move_project_to_archive_moves_row(tmp_path: Path) -> None:
@@ -142,4 +144,6 @@ def test_load_projects_tolerates_empty_and_strange_headers(tmp_path: Path) -> No
 
     assert len(projects) == 1
     assert projects[0].project_id == "row:2"
-    assert projects[0].fields == {"Name": "Project A", "Status": "Ready"}
+    assert projects[0].fields["Name"] == "Project A"
+    assert projects[0].fields["Status"] == "Ready"
+    assert projects[0].fields[FILLDOC_ID_FIELD] == projects[0].internal_id

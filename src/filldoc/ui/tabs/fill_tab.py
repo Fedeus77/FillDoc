@@ -17,10 +17,10 @@ from PySide6.QtWidgets import (
 )
 
 from filldoc.core.settings import AppSettings
-from filldoc.excel.excel_store import ExcelProjectStore
 from filldoc.excel.models import Project
 from filldoc.fill.missing_fields import compute_missing_fields
 from filldoc.generator.docx_generator import generate_docx_from_template
+from filldoc.projects.repository import ProjectRepository
 from filldoc.templates.scanner import TemplateLibrary
 from filldoc.variables.dictionary import default_dictionary
 
@@ -84,11 +84,10 @@ class FillTab(QWidget):
             return
 
         try:
-            store = ExcelProjectStore(self._settings.excel_path)
-            self._projects = store.load_projects()
+            self._projects = ProjectRepository(self._settings.excel_path).load_projects()
             self.project_combo.clear()
             for p in self._projects:
-                self.project_combo.addItem(p.project_id)
+                self.project_combo.addItem(p.project_id, p.internal_id)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Заполнение", f"Не удалось загрузить проекты: {e}")
             return
@@ -109,9 +108,9 @@ class FillTab(QWidget):
         self.generate_btn.setEnabled(False)
 
     def _current_project(self) -> Project | None:
-        pid = self.project_combo.currentText().strip()
+        pid = self.project_combo.currentData()
         for p in self._projects:
-            if p.project_id == pid:
+            if p.internal_id == pid:
                 return p
         return None
 
