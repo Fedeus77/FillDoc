@@ -40,7 +40,7 @@ from filldoc.projects.repository import ProjectConflictError, ProjectRepository
 from filldoc.templates.models import TemplateCard
 from filldoc.templates.quality import analyze_template_quality
 from filldoc.templates.scanner import TemplateLibrary
-from filldoc.variables.dictionary import default_dictionary
+from filldoc.variables.dictionary import load_variable_dictionary
 from filldoc.ui.icons import make_icon, icon_btn, update_icon_btn, SVG_REFRESH, SVG_SAVE, SVG_FOLDER
 from filldoc.ui.theme import ThemeColors, ThemeManager
 
@@ -246,7 +246,7 @@ class TemplatesTab(QWidget):
         self._cards: list[TemplateCard] = []
         self._by_path: dict[str, TemplateCard] = {}
         self._projects: list[Project] = []
-        self._dict = default_dictionary()
+        self._dict = load_variable_dictionary()
         self._current_card: TemplateCard | None = None
         self._missing_table: QTableWidget | None = None
         self._bulk_mode = False
@@ -463,8 +463,16 @@ QComboBox QAbstractItemView {{
     # ── Загрузка данных ───────────────────────────────────────────────────────
 
     def _reload_all(self) -> None:
+        self.reload_dictionary()
         self._load_projects()
         self._scan_templates()
+
+    def reload_dictionary(self) -> None:
+        self._dict = load_variable_dictionary()
+        if self._bulk_mode:
+            self._build_bulk_card()
+        elif self._current_card is not None:
+            self._build_card(self._current_card)
 
     @staticmethod
     def _project_display_name(p: Project) -> str:

@@ -70,6 +70,7 @@ class MainWindow(QMainWindow):
 
         self.settings_tab.settings_changed.connect(self._on_settings_changed)
         self.settings_tab.theme_changed.connect(self._on_theme_changed)
+        self.variables_tab.dictionary_changed.connect(self._on_dictionary_changed)
         self._on_settings_changed()
 
     def show_status(self, message: str, timeout_ms: int = 4000) -> None:
@@ -121,6 +122,8 @@ class MainWindow(QMainWindow):
             self.projects_tab._save_all()
         elif idx == 1:
             self.templates_tab._save_to_excel()
+        elif idx == 2:
+            self.variables_tab._save_dictionary()
 
     def _hotkey_refresh(self) -> None:
         """Ctrl+R: обновить в зависимости от активной вкладки."""
@@ -129,6 +132,11 @@ class MainWindow(QMainWindow):
             self.projects_tab._load_projects()
         elif idx == 1:
             self.templates_tab._reload_all()
+        elif idx == 2:
+            self.variables_tab.reload_all_variables()
+
+    def _on_dictionary_changed(self) -> None:
+        self.templates_tab.reload_dictionary()
 
     def _on_settings_changed(self) -> None:
         s: AppSettings = self.settings_tab.get_settings()
@@ -155,3 +163,4 @@ class MainWindow(QMainWindow):
             self.templates_tab._load_projects()
         if templates_ok:
             self.templates_tab._scan_templates()
+            self.variables_tab._reload_dictionary(show_errors=False)

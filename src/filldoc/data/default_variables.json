@@ -1,0 +1,167 @@
+{
+  "version": 1,
+  "variables": [
+    {
+      "technical_name": "№ дела",
+      "display_name": "№ дела",
+      "variants": ["номер дела", "№дела"],
+      "field_type": "text",
+      "required": false,
+      "group": "project",
+      "comment": ""
+    },
+    {
+      "technical_name": "Заказчик",
+      "display_name": "Заказчик",
+      "variants": ["ЗАКАЗЧИК"],
+      "field_type": "text",
+      "required": false,
+      "group": "customer",
+      "comment": ""
+    },
+    {
+      "technical_name": "Должник",
+      "display_name": "Должник",
+      "variants": ["ДОЛЖНИК"],
+      "field_type": "text",
+      "required": false,
+      "group": "debtor",
+      "comment": ""
+    },
+    {
+      "technical_name": "ИНН должника",
+      "display_name": "ИНН должника",
+      "variants": ["ИНН Должник", "ИНН ДОЛЖНИКА"],
+      "field_type": "text",
+      "required": false,
+      "group": "debtor",
+      "comment": "ИНН юрлица или ИП"
+    },
+    {
+      "technical_name": "ОГРН должника",
+      "display_name": "ОГРН должника",
+      "variants": ["ОГРН Должник", "ОГРН Должника"],
+      "field_type": "text",
+      "required": false,
+      "group": "debtor",
+      "comment": ""
+    },
+    {
+      "technical_name": "Юр адрес должника",
+      "display_name": "Юр. адрес должника",
+      "variants": ["Юр. адрес Должник", "Юр Адрес должника"],
+      "field_type": "multiline",
+      "required": false,
+      "group": "debtor",
+      "comment": ""
+    },
+    {
+      "technical_name": "Дата решения",
+      "display_name": "Дата решения",
+      "variants": ["дата решения", "Дата решения"],
+      "field_type": "date",
+      "required": false,
+      "group": "case",
+      "comment": ""
+    },
+    {
+      "technical_name": "Вид услуг",
+      "display_name": "Вид услуг",
+      "variants": ["по оплате(вид услуг)"],
+      "field_type": "text",
+      "required": false,
+      "group": "case",
+      "comment": ""
+    },
+    {
+      "technical_name": "Цедент полное наименование",
+      "display_name": "Цедент полное наименование",
+      "variants": ["Цедент П.Наим"],
+      "field_type": "text",
+      "required": false,
+      "group": "cession",
+      "comment": ""
+    },
+    {
+      "technical_name": "Цена уступки",
+      "display_name": "Цена уступки",
+      "variants": ["цена уступки"],
+      "field_type": "number",
+      "required": false,
+      "group": "cession",
+      "comment": ""
+    },
+    {
+      "technical_name": "Цена прописью",
+      "display_name": "Цена прописью",
+      "variants": ["цена прописью"],
+      "field_type": "text",
+      "required": false,
+      "group": "cession",
+      "comment": ""
+    },
+    {
+      "technical_name": "Корреспондентский счет банка заказчика",
+      "display_name": "Корреспондентский счет банка заказчика",
+      "variants": ["к/сч. Банка Заказчика"],
+      "field_type": "text",
+      "required": false,
+      "group": "customer",
+      "comment": ""
+    },
+    {
+      "technical_name": "Расчетный счет заказчика",
+      "display_name": "Расчетный счет заказчика",
+      "variants": ["р/сч. Заказчика"],
+      "field_type": "text",
+      "required": false,
+      "group": "customer",
+      "comment": ""
+    },
+    {
+      "technical_name": "Юр адрес заказчика",
+      "display_name": "Юр. адрес заказчика",
+      "variants": ["Юр Адрес Заказчика"],
+      "field_type": "multiline",
+      "required": false,
+      "group": "customer",
+      "comment": ""
+    },
+    {
+      "technical_name": "Юр адрес цедента",
+      "display_name": "Юр. адрес цедента",
+      "variants": ["Юр. адрес цедента"],
+      "field_type": "multiline",
+      "required": false,
+      "group": "cession",
+      "comment": ""
+    },
+    {
+      "technical_name": "Номер цессии",
+      "display_name": "Номер цессии",
+      "variants": ["Номер Цессии"],
+      "field_type": "text",
+      "required": false,
+      "group": "cession",
+      "comment": ""
+    },
+    {
+      "technical_name": "Резолютивка",
+      "display_name": "Резолютивка",
+      "variants": ["Резюлютивка"],
+      "field_type": "multiline",
+      "required": false,
+      "group": "case",
+      "comment": ""
+    },
+    {
+      "technical_name": "Резолютивка – взыскать с",
+      "display_name": "Резолютивка – взыскать с",
+      "variants": [],
+      "field_type": "multiline",
+      "required": false,
+      "group": "case",
+      "comment": ""
+    }
+  ]
+}
