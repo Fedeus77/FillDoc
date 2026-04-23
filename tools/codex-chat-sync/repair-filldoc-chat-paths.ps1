@@ -1,9 +1,9 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$SyncDir,
+    [string]$OldProjectPath,
 
     [Parameter(Mandatory = $true)]
-    [string]$ProjectPath,
+    [string]$NewProjectPath,
 
     [string]$CodexDir = "$HOME\.codex"
 )
@@ -15,7 +15,7 @@ if (-not (Test-Path $PythonScript)) {
     throw "Не найден $PythonScript"
 }
 
-python $PythonScript import --sync-dir $SyncDir --project-path $ProjectPath --codex-dir $CodexDir
+python $PythonScript repair-paths --old-project-path $OldProjectPath --new-project-path $NewProjectPath --codex-dir $CodexDir
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
